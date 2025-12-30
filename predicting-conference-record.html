@@ -13,7 +13,7 @@
 
 <meta name="date" content="2025-12-29" />
 
-<title>Simulating Lafayette’s Conference Schedule</title>
+<title>Simulating the Patriot League Schedule</title>
 
 <script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
 // be compatible with the behavior of Pandoc < 2.8).
@@ -574,14 +574,15 @@ display: none;
 
 
 
-<h1 class="title toc-ignore">Simulating Lafayette’s Conference
-Schedule</h1>
+<h1 class="title toc-ignore">Simulating the Patriot League Schedule</h1>
 <h4 class="author">Noah Seaner</h4>
 <h4 class="date">12/29/2025</h4>
 
 </div>
 
 
+<div id="introduction" class="section level1">
+<h1>Introduction</h1>
 <div id="lafayettes-season-so-far" class="section level2">
 <h2>Lafayette’s Season So Far</h2>
 <p>As of December 28, every team in the Patriot League has finished
@@ -632,10 +633,158 @@ scores and win probabilities for each game on the schedule, based on the
 offensive and defensive efficiency of each Patriot League team so far
 this season.</p>
 </div>
-<div id="the-results" class="section level2">
-<h2>The Results</h2>
-<div id="projected-win-total" class="section level3">
-<h3>Projected Win Total</h3>
+</div>
+<div id="the-simulation" class="section level1">
+<h1>The Simulation</h1>
+<div id="lafayette" class="section level2">
+<h2>Lafayette</h2>
+<pre class="r"><code># this is the simulation used for every Patriot League team&#39;s schedule, I&#39;m only showing Lafayette&#39;s since there all the same
+
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123) # for reproducibility
+n_sims &lt;- 10000
+home_court_adv &lt;- 2.5 # tunable effect of home-court advantage
+min_possessions &lt;- 55
+max_possessions &lt;- 85
+
+games_hist &lt;- read_excel(&quot;conference record sim.xlsx&quot;, sheet = &quot;PL non-conf sched&quot;) %&gt;% ## one sheet for non-conference games
+  mutate(Date = as.Date(Date))
+
+sched &lt;- read_excel(&quot;conference record sim.xlsx&quot;, sheet = &quot;Lafayette PL sched&quot;) %&gt;% ## sheet for Lafayette&#39;s conference schedule
+  mutate(Date = as.Date(Date))
+
+ratings &lt;- read_excel(&quot;conference record sim.xlsx&quot;, sheet = &quot;Other PL Teams&quot;) %&gt;% ## offensive/defensive rating and tempo for each Patriot League team
+  mutate(Team = str_trim(Team))
+
+sched &lt;- sched %&gt;%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings &lt;- ratings %&gt;%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim &lt;- sched %&gt;% ## joining Lafayette&#39;s ratings and their opponents ratings to the schedule sheet
+  left_join(
+    ratings %&gt;% rename_with(~ paste0(&quot;team_&quot;, .), -Team),
+    by = c(&quot;Team&quot; = &quot;Team&quot;)
+  ) %&gt;%
+  left_join(
+    ratings %&gt;% rename_with(~ paste0(&quot;opp_&quot;, .), -Team),
+    by = c(&quot;Opponent&quot; = &quot;Team&quot;)
+  ) %&gt;%
+  mutate( ## labeling home and away games for the sake of home-court advantage
+    hca_team = case_when(Home_Away == &quot;H&quot; ~ home_court_adv,
+                         Home_Away == &quot;A&quot; ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores &lt;- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games &lt;- nrow(sched_sim)
+
+  # finding means and standard deviations for possessions, team efficiency, and opponent efficiency
+  # using parameters mean = (a + b) / 2 and sd = sqrt(a^2 + b^2) / 2
+  poss_mean &lt;- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   &lt;- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean &lt;- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   &lt;- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  &lt;- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    &lt;- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss &lt;- matrix( # simulating possessions for each game from a random normal distribution
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss &lt;- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff &lt;- matrix( # simulating Lafayette&#39;s efficiency for each game from a random normal distribution
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff &lt;- matrix( # simulating opponent efficiency for each game from a random normal distribution
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score &lt;- round(poss * team_eff / 100) # converting efficiency to points scored and allowed
+  opp_score  &lt;- round(poss * opp_eff  / 100)
+
+  team_score[team_score &lt; 0] &lt;- 0
+  opp_score[opp_score &lt; 0]   &lt;- 0
+
+  win &lt;- (team_score &gt; opp_score) * 1L # counting wins and losses
+
+  out &lt;- tibble::tibble( ## keeps track of everything that was simulated in a table
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep &lt;- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c(&quot;Game_ID&quot;,&quot;Date&quot;,&quot;Team&quot;,&quot;Opponent&quot;,&quot;Home_Away&quot;)]
+
+  dplyr::bind_cols(sched_rep, out %&gt;% dplyr::select(-game_index))
+}
+
+sim_results &lt;- sim_scores(sched_sim, n_sims=10000) # Monte Carlo simulation for 10,000 iterations</code></pre>
+<div id="results-projected-win-total-and-win-probabilities" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<pre class="r"><code>library(kableExtra)
+library(scales)
+
+record_dist &lt;- sim_results %&gt;% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %&gt;%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = &quot;drop&quot;) %&gt;%
+  count(wins) %&gt;%
+  mutate(prob = n / sum(n)) %&gt;%
+  arrange(wins)
+
+record_dist %&gt;%
+  arrange(wins) %&gt;%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    &#39;Sim Count&#39; = n
+  ) %&gt;%
+  select(&#39;Conference Wins&#39; = wins, &#39;Sim Count&#39;, Probability) %&gt;%
+  kbl(
+    format = &quot;html&quot;,
+    caption = &quot;Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)&quot;,
+    align = &quot;c&quot;
+  ) %&gt;%
+  kable_styling(
+    bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;condensed&quot;, &quot;responsive&quot;),
+    full_width = FALSE,
+    position = &quot;left&quot;
+  ) %&gt;%
+  row_spec(0, bold = TRUE) %&gt;%
+  column_spec(3, bold = TRUE)</code></pre>
 <table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
 <caption>
 Projected Patriot League Record Distribution (10,000 Monte Carlo
@@ -861,9 +1010,55 @@ with more wins than less, which is very encouraging.</p>
 majority of first-year players in the team. If they can get going
 alongside the senior players, they are more than capable of making noise
 in Patriot League play this season.</p>
-</div>
-<div id="projected-scores-for-each-game" class="section level3">
-<h3>Projected Scores For Each Game</h3>
+<pre class="r"><code>matchup_summary &lt;- sim_results %&gt;% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %&gt;%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = &quot;drop&quot;
+  ) %&gt;%
+  arrange(desc(win_prob))
+
+matchup_pretty &lt;- matchup_summary %&gt;% ## rounds everything to one decimal place for readability
+  mutate(
+    `Lafayette Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %&gt;%
+  select(
+    Opponent, Site = Home_Away,
+    `Lafayette Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors &lt;- colorRampPalette(c(&quot;#f8d7da&quot;, &quot;#fff3cd&quot;, &quot;#d1e7dd&quot;))(101) ## adds a red -&gt; green color scale
+margin_colors &lt;- colorRampPalette(c(&quot;#f8d7da&quot;, &quot;#ffffff&quot;, &quot;#d1e7dd&quot;))(101)
+
+win_idx &lt;- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx &lt;- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %&gt;%
+ kbl(
+    format = &quot;html&quot;,
+    caption = &quot;Projected Game Outcomes (Average Score, Margin, and Win Probability)&quot;,
+    align = &quot;c&quot;
+  ) %&gt;%
+  kable_styling(
+    bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;responsive&quot;),
+    full_width = FALSE,
+    position = &quot;left&quot;
+  ) %&gt;%
+  row_spec(0, bold = TRUE) %&gt;%
+  column_spec(5, background = margin_colors[mrg_idx]) %&gt;%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %&gt;%
+  footnote(
+    general = &quot;Color scale: green = more favorable, red = less favorable.&quot;
+  )</code></pre>
 <table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
 <caption>
 Projected Game Outcomes (Average Score, Margin, and Win Probability)
@@ -1285,6 +1480,5466 @@ the circumstances of not being favored. It gives a team all the
 confidence in the world going on the road and beating an opponent as the
 underdog.</p>
 </div>
+</div>
+<div id="american" class="section level2">
+<h2>American</h2>
+<div id="results-projected-win-total-and-win-probabilities-1" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+22
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+86
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+244
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+606
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1108
+</td>
+<td style="text-align:center;font-weight: bold;">
+11.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1559
+</td>
+<td style="text-align:center;font-weight: bold;">
+15.6%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1954
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+1800
+</td>
+<td style="text-align:center;font-weight: bold;">
+18.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+1337
+</td>
+<td style="text-align:center;font-weight: bold;">
+13.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+795
+</td>
+<td style="text-align:center;font-weight: bold;">
+8.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+341
+</td>
+<td style="text-align:center;font-weight: bold;">
+3.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+109
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+16
+</td>
+<td style="text-align:center;">
+25
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+17
+</td>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.1%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+American Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+80.2
+</td>
+<td style="text-align:center;">
+68.0
+</td>
+<td style="text-align:center;background-color: rgba(226, 240, 233, 255) !important;">
+12.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(230, 236, 213, 255) !important;">
+76.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.1
+</td>
+<td style="text-align:center;">
+69.2
+</td>
+<td style="text-align:center;background-color: rgba(234, 244, 240, 255) !important;">
+8.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(234, 237, 212, 255) !important;">
+71.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.6
+</td>
+<td style="text-align:center;">
+71.1
+</td>
+<td style="text-align:center;background-color: rgba(237, 245, 242, 255) !important;">
+7.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(237, 238, 211, 255) !important;">
+69.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+80.0
+</td>
+<td style="text-align:center;">
+71.2
+</td>
+<td style="text-align:center;background-color: rgba(234, 244, 240, 255) !important;">
+8.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(237, 238, 211, 255) !important;">
+68.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+79.8
+</td>
+<td style="text-align:center;">
+73.3
+</td>
+<td style="text-align:center;background-color: rgba(240, 247, 244, 255) !important;">
+6.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(242, 239, 209, 255) !important;">
+64.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+79.4
+</td>
+<td style="text-align:center;">
+73.5
+</td>
+<td style="text-align:center;background-color: rgba(242, 248, 245, 255) !important;">
+5.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(242, 239, 209, 255) !important;">
+63.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+79.9
+</td>
+<td style="text-align:center;">
+74.0
+</td>
+<td style="text-align:center;background-color: rgba(241, 247, 244, 255) !important;">
+5.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 239, 209, 255) !important;">
+63.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+76.6
+</td>
+<td style="text-align:center;">
+71.5
+</td>
+<td style="text-align:center;background-color: rgba(243, 248, 246, 255) !important;">
+5.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 240, 208, 255) !important;">
+61.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.2
+</td>
+<td style="text-align:center;">
+74.1
+</td>
+<td style="text-align:center;background-color: rgba(245, 250, 248, 255) !important;">
+4.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(245, 240, 208, 255) !important;">
+59.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.4
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+1.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 242, 205, 255) !important;">
+53.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+76.6
+</td>
+<td style="text-align:center;">
+75.0
+</td>
+<td style="text-align:center;background-color: rgba(251, 253, 252, 255) !important;">
+1.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 242, 205, 255) !important;">
+52.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.9
+</td>
+<td style="text-align:center;">
+74.6
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+0.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+49.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.9
+</td>
+<td style="text-align:center;">
+72.8
+</td>
+<td style="text-align:center;background-color: rgba(255, 255, 255, 255) !important;">
+0.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+48.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+76.3
+</td>
+<td style="text-align:center;">
+76.5
+</td>
+<td style="text-align:center;background-color: rgba(255, 255, 255, 255) !important;">
+-0.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+48.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+75.9
+</td>
+<td style="text-align:center;">
+77.1
+</td>
+<td style="text-align:center;background-color: rgba(254, 252, 252, 255) !important;">
+-1.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 240, 206, 255) !important;">
+46.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+76.4
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;background-color: rgba(254, 252, 252, 255) !important;">
+-1.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 240, 206, 255) !important;">
+45.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.8
+</td>
+<td style="text-align:center;">
+77.2
+</td>
+<td style="text-align:center;background-color: rgba(254, 250, 250, 255) !important;">
+-2.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+42.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+69.5
+</td>
+<td style="text-align:center;">
+76.0
+</td>
+<td style="text-align:center;background-color: rgba(252, 242, 243, 255) !important;">
+-6.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 234, 209, 255) !important;">
+33.7
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="army" class="section level2">
+<h2>Army</h2>
+<div id="results-projected-win-total-and-win-probabilities-2" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+34
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+134
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+387
+</td>
+<td style="text-align:center;font-weight: bold;">
+3.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+916
+</td>
+<td style="text-align:center;font-weight: bold;">
+9.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+1370
+</td>
+<td style="text-align:center;font-weight: bold;">
+13.7%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1799
+</td>
+<td style="text-align:center;font-weight: bold;">
+18.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1905
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1590
+</td>
+<td style="text-align:center;font-weight: bold;">
+15.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+1043
+</td>
+<td style="text-align:center;font-weight: bold;">
+10.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+518
+</td>
+<td style="text-align:center;font-weight: bold;">
+5.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+214
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+69
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.7%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+16
+</td>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Army Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.9
+</td>
+<td style="text-align:center;">
+68.8
+</td>
+<td style="text-align:center;background-color: rgba(233, 243, 239, 255) !important;">
+9.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(233, 237, 212, 255) !important;">
+73.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.6
+</td>
+<td style="text-align:center;">
+69.8
+</td>
+<td style="text-align:center;background-color: rgba(242, 248, 245, 255) !important;">
+5.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(241, 239, 209, 255) !important;">
+65.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+71.7
+</td>
+<td style="text-align:center;background-color: rgba(241, 247, 244, 255) !important;">
+5.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(242, 239, 209, 255) !important;">
+64.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.1
+</td>
+<td style="text-align:center;">
+71.7
+</td>
+<td style="text-align:center;background-color: rgba(244, 249, 247, 255) !important;">
+4.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 240, 208, 255) !important;">
+61.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+74.4
+</td>
+<td style="text-align:center;background-color: rgba(247, 251, 249, 255) !important;">
+3.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(247, 241, 207, 255) !important;">
+57.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.8
+</td>
+<td style="text-align:center;">
+74.1
+</td>
+<td style="text-align:center;background-color: rgba(248, 251, 250, 255) !important;">
+2.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(249, 241, 206, 255) !important;">
+56.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.3
+</td>
+<td style="text-align:center;">
+72.3
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+1.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 242, 206, 255) !important;">
+54.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.8
+</td>
+<td style="text-align:center;">
+74.8
+</td>
+<td style="text-align:center;background-color: rgba(252, 253, 252, 255) !important;">
+1.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 242, 205, 255) !important;">
+51.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.8
+</td>
+<td style="text-align:center;">
+76.1
+</td>
+<td style="text-align:center;background-color: rgba(253, 254, 253, 255) !important;">
+0.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+50.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.1
+</td>
+<td style="text-align:center;">
+73.2
+</td>
+<td style="text-align:center;background-color: rgba(254, 252, 252, 255) !important;">
+-1.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 240, 206, 255) !important;">
+45.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.1
+</td>
+<td style="text-align:center;">
+75.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 252, 252, 255) !important;">
+-1.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 240, 206, 255) !important;">
+44.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+70.7
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;background-color: rgba(253, 248, 249, 255) !important;">
+-3.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+40.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.6
+</td>
+<td style="text-align:center;">
+75.2
+</td>
+<td style="text-align:center;background-color: rgba(254, 249, 249, 255) !important;">
+-2.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+39.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;background-color: rgba(253, 247, 247, 255) !important;">
+-3.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 236, 208, 255) !important;">
+37.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.9
+</td>
+<td style="text-align:center;">
+78.1
+</td>
+<td style="text-align:center;background-color: rgba(253, 247, 247, 255) !important;">
+-4.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 235, 208, 255) !important;">
+37.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.2
+</td>
+<td style="text-align:center;">
+79.9
+</td>
+<td style="text-align:center;background-color: rgba(252, 241, 242, 255) !important;">
+-6.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 233, 209, 255) !important;">
+32.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;">
+78.0
+</td>
+<td style="text-align:center;background-color: rgba(253, 243, 244, 255) !important;">
+-5.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 232, 209, 255) !important;">
+31.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+67.1
+</td>
+<td style="text-align:center;">
+76.7
+</td>
+<td style="text-align:center;background-color: rgba(251, 235, 237, 255) !important;">
+-9.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 228, 211, 255) !important;">
+23.9
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="boston-u" class="section level2">
+<h2>Boston U</h2>
+<div id="results-projected-win-total-and-win-probabilities-3" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+0
+</td>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+23
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+99
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+315
+</td>
+<td style="text-align:center;font-weight: bold;">
+3.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+669
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.7%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+1228
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1787
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1947
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1630
+</td>
+<td style="text-align:center;font-weight: bold;">
+16.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+1206
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+679
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.8%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+291
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+89
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+27
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+16
+</td>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Boston U Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.8
+</td>
+<td style="text-align:center;">
+68.7
+</td>
+<td style="text-align:center;background-color: rgba(233, 243, 239, 255) !important;">
+9.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(232, 237, 212, 255) !important;">
+73.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.7
+</td>
+<td style="text-align:center;">
+69.6
+</td>
+<td style="text-align:center;background-color: rgba(240, 247, 244, 255) !important;">
+6.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(238, 238, 210, 255) !important;">
+67.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+71.7
+</td>
+<td style="text-align:center;background-color: rgba(242, 248, 245, 255) !important;">
+5.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(242, 239, 209, 255) !important;">
+64.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.2
+</td>
+<td style="text-align:center;">
+71.5
+</td>
+<td style="text-align:center;background-color: rgba(243, 249, 246, 255) !important;">
+4.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(242, 239, 209, 255) !important;">
+63.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.6
+</td>
+<td style="text-align:center;">
+73.6
+</td>
+<td style="text-align:center;background-color: rgba(245, 250, 248, 255) !important;">
+4.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(245, 240, 208, 255) !important;">
+60.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+74.1
+</td>
+<td style="text-align:center;background-color: rgba(247, 251, 249, 255) !important;">
+3.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(247, 241, 207, 255) !important;">
+58.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.5
+</td>
+<td style="text-align:center;">
+71.9
+</td>
+<td style="text-align:center;background-color: rgba(248, 251, 250, 255) !important;">
+2.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(249, 241, 206, 255) !important;">
+55.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.8
+</td>
+<td style="text-align:center;">
+74.2
+</td>
+<td style="text-align:center;background-color: rgba(251, 253, 252, 255) !important;">
+1.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 242, 205, 255) !important;">
+53.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.9
+</td>
+<td style="text-align:center;">
+76.1
+</td>
+<td style="text-align:center;background-color: rgba(253, 254, 253, 255) !important;">
+0.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+50.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.3
+</td>
+<td style="text-align:center;">
+72.8
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+47.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.3
+</td>
+<td style="text-align:center;">
+74.7
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+47.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+70.9
+</td>
+<td style="text-align:center;">
+73.1
+</td>
+<td style="text-align:center;background-color: rgba(254, 250, 250, 255) !important;">
+-2.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+42.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.9
+</td>
+<td style="text-align:center;">
+75.1
+</td>
+<td style="text-align:center;background-color: rgba(254, 250, 250, 255) !important;">
+-2.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+41.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.9
+</td>
+<td style="text-align:center;">
+76.9
+</td>
+<td style="text-align:center;background-color: rgba(253, 248, 249, 255) !important;">
+-3.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+39.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.3
+</td>
+<td style="text-align:center;">
+77.6
+</td>
+<td style="text-align:center;background-color: rgba(253, 248, 249, 255) !important;">
+-3.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+39.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.5
+</td>
+<td style="text-align:center;">
+79.4
+</td>
+<td style="text-align:center;background-color: rgba(252, 243, 243, 255) !important;">
+-5.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 234, 209, 255) !important;">
+33.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.5
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;background-color: rgba(253, 245, 246, 255) !important;">
+-5.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 232, 209, 255) !important;">
+32.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+67.6
+</td>
+<td style="text-align:center;">
+76.3
+</td>
+<td style="text-align:center;background-color: rgba(251, 237, 238, 255) !important;">
+-8.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 228, 211, 255) !important;">
+25.1
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="bucknell" class="section level2">
+<h2>Bucknell</h2>
+<div id="results-projected-win-total-and-win-probabilities-4" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+0
+</td>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;">
+69
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.7%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+279
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.8%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+825
+</td>
+<td style="text-align:center;font-weight: bold;">
+8.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+1445
+</td>
+<td style="text-align:center;font-weight: bold;">
+14.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+1950
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+2025
+</td>
+<td style="text-align:center;font-weight: bold;">
+20.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+1566
+</td>
+<td style="text-align:center;font-weight: bold;">
+15.7%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1041
+</td>
+<td style="text-align:center;font-weight: bold;">
+10.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+510
+</td>
+<td style="text-align:center;font-weight: bold;">
+5.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+202
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+60
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.6%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+17
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Bucknell Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;background-color: rgba(255, 255, 255, 255) !important;">
+0.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+48.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+70.6
+</td>
+<td style="text-align:center;">
+70.6
+</td>
+<td style="text-align:center;background-color: rgba(255, 255, 255, 255) !important;">
+0.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+48.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+71.0
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 252, 255) !important;">
+-1.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 239, 206, 255) !important;">
+44.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.1
+</td>
+<td style="text-align:center;">
+74.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 250, 250, 255) !important;">
+-2.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+42.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+71.9
+</td>
+<td style="text-align:center;">
+74.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 250, 250, 255) !important;">
+-2.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+41.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.5
+</td>
+<td style="text-align:center;">
+75.2
+</td>
+<td style="text-align:center;background-color: rgba(254, 249, 249, 255) !important;">
+-2.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+40.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+70.7
+</td>
+<td style="text-align:center;">
+74.9
+</td>
+<td style="text-align:center;background-color: rgba(253, 247, 247, 255) !important;">
+-4.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 235, 208, 255) !important;">
+36.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+71.5
+</td>
+<td style="text-align:center;">
+76.7
+</td>
+<td style="text-align:center;background-color: rgba(253, 244, 245, 255) !important;">
+-5.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 235, 208, 255) !important;">
+36.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+69.1
+</td>
+<td style="text-align:center;">
+75.8
+</td>
+<td style="text-align:center;background-color: rgba(252, 241, 242, 255) !important;">
+-6.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 232, 209, 255) !important;">
+31.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+67.2
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;background-color: rgba(252, 242, 243, 255) !important;">
+-6.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 231, 210, 255) !important;">
+29.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+65.6
+</td>
+<td style="text-align:center;">
+73.8
+</td>
+<td style="text-align:center;background-color: rgba(252, 239, 240, 255) !important;">
+-8.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 230, 210, 255) !important;">
+26.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.9
+</td>
+<td style="text-align:center;">
+77.8
+</td>
+<td style="text-align:center;background-color: rgba(251, 237, 238, 255) !important;">
+-8.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 229, 211, 255) !important;">
+25.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+67.6
+</td>
+<td style="text-align:center;">
+75.7
+</td>
+<td style="text-align:center;background-color: rgba(252, 239, 240, 255) !important;">
+-8.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 228, 211, 255) !important;">
+24.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.6
+</td>
+<td style="text-align:center;">
+77.9
+</td>
+<td style="text-align:center;background-color: rgba(251, 236, 237, 255) !important;">
+-9.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 228, 211, 255) !important;">
+23.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.8
+</td>
+<td style="text-align:center;">
+78.4
+</td>
+<td style="text-align:center;background-color: rgba(251, 235, 237, 255) !important;">
+-9.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 227, 212, 255) !important;">
+23.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.2
+</td>
+<td style="text-align:center;">
+80.1
+</td>
+<td style="text-align:center;background-color: rgba(250, 231, 232, 255) !important;">
+-11.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 227, 212, 255) !important;">
+21.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+67.5
+</td>
+<td style="text-align:center;">
+78.4
+</td>
+<td style="text-align:center;background-color: rgba(251, 233, 235, 255) !important;">
+-10.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(250, 225, 213, 255) !important;">
+18.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+62.4
+</td>
+<td style="text-align:center;">
+77.0
+</td>
+<td style="text-align:center;background-color: rgba(249, 226, 228, 255) !important;">
+-14.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(249, 222, 214, 255) !important;">
+14.2
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="colgate" class="section level2">
+<h2>Colgate</h2>
+<div id="results-projected-win-total-and-win-probabilities-5" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+18
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+90
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+293
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+664
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.6%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1202
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1765
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.6%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1907
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+1712
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+1292
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+649
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+292
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+92
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+16
+</td>
+<td style="text-align:center;">
+19
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+17
+</td>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Colgate Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.6
+</td>
+<td style="text-align:center;">
+67.3
+</td>
+<td style="text-align:center;background-color: rgba(229, 241, 235, 255) !important;">
+11.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(227, 235, 214, 255) !important;">
+80.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.3
+</td>
+<td style="text-align:center;">
+68.4
+</td>
+<td style="text-align:center;background-color: rgba(236, 245, 241, 255) !important;">
+7.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(233, 237, 212, 255) !important;">
+72.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.0
+</td>
+<td style="text-align:center;">
+70.3
+</td>
+<td style="text-align:center;background-color: rgba(240, 247, 244, 255) !important;">
+6.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(234, 237, 212, 255) !important;">
+71.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.4
+</td>
+<td style="text-align:center;">
+70.4
+</td>
+<td style="text-align:center;background-color: rgba(236, 245, 241, 255) !important;">
+8.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(235, 237, 211, 255) !important;">
+71.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.1
+</td>
+<td style="text-align:center;">
+72.3
+</td>
+<td style="text-align:center;background-color: rgba(241, 247, 244, 255) !important;">
+5.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(240, 239, 210, 255) !important;">
+66.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;background-color: rgba(243, 249, 246, 255) !important;">
+5.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(242, 239, 209, 255) !important;">
+64.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.3
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;background-color: rgba(243, 249, 246, 255) !important;">
+4.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 239, 209, 255) !important;">
+63.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+75.0
+</td>
+<td style="text-align:center;">
+70.6
+</td>
+<td style="text-align:center;background-color: rgba(244, 249, 247, 255) !important;">
+4.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 240, 208, 255) !important;">
+62.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+74.5
+</td>
+<td style="text-align:center;background-color: rgba(248, 251, 250, 255) !important;">
+3.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(248, 241, 207, 255) !important;">
+57.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.9
+</td>
+<td style="text-align:center;">
+73.8
+</td>
+<td style="text-align:center;background-color: rgba(252, 253, 252, 255) !important;">
+1.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 242, 205, 255) !important;">
+51.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.8
+</td>
+<td style="text-align:center;">
+71.8
+</td>
+<td style="text-align:center;background-color: rgba(253, 254, 253, 255) !important;">
+1.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+51.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+71.5
+</td>
+<td style="text-align:center;">
+72.1
+</td>
+<td style="text-align:center;background-color: rgba(254, 253, 253, 255) !important;">
+-0.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+47.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+46.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.6
+</td>
+<td style="text-align:center;">
+76.0
+</td>
+<td style="text-align:center;background-color: rgba(254, 252, 252, 255) !important;">
+-1.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 240, 206, 255) !important;">
+44.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.2
+</td>
+<td style="text-align:center;">
+75.9
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 252, 255) !important;">
+-1.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 239, 206, 255) !important;">
+42.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.7
+</td>
+<td style="text-align:center;">
+76.6
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 251, 255) !important;">
+-1.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+42.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.9
+</td>
+<td style="text-align:center;">
+78.3
+</td>
+<td style="text-align:center;background-color: rgba(253, 246, 246, 255) !important;">
+-4.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 235, 208, 255) !important;">
+37.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.1
+</td>
+<td style="text-align:center;">
+75.4
+</td>
+<td style="text-align:center;background-color: rgba(252, 240, 241, 255) !important;">
+-7.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 230, 210, 255) !important;">
+27.9
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="holy-cross" class="section level2">
+<h2>Holy Cross</h2>
+<div id="results-projected-win-total-and-win-probabilities-6" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+0
+</td>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+39
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+189
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+509
+</td>
+<td style="text-align:center;font-weight: bold;">
+5.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+1027
+</td>
+<td style="text-align:center;font-weight: bold;">
+10.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+1603
+</td>
+<td style="text-align:center;font-weight: bold;">
+16.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+1950
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1891
+</td>
+<td style="text-align:center;font-weight: bold;">
+18.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1352
+</td>
+<td style="text-align:center;font-weight: bold;">
+13.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+823
+</td>
+<td style="text-align:center;font-weight: bold;">
+8.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+401
+</td>
+<td style="text-align:center;font-weight: bold;">
+4.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+147
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+51
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.1%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Holy Cross Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;">
+67.2
+</td>
+<td style="text-align:center;background-color: rgba(240, 247, 244, 255) !important;">
+6.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(238, 238, 210, 255) !important;">
+68.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;">
+70.2
+</td>
+<td style="text-align:center;background-color: rgba(247, 251, 249, 255) !important;">
+3.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(247, 241, 207, 255) !important;">
+57.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.0
+</td>
+<td style="text-align:center;">
+69.9
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+2.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(249, 241, 206, 255) !important;">
+55.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+73.2
+</td>
+<td style="text-align:center;">
+72.2
+</td>
+<td style="text-align:center;background-color: rgba(253, 254, 253, 255) !important;">
+1.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 242, 205, 255) !important;">
+51.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.9
+</td>
+<td style="text-align:center;">
+72.2
+</td>
+<td style="text-align:center;background-color: rgba(253, 254, 253, 255) !important;">
+0.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+51.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;">
+73.0
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+0.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+49.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+70.4
+</td>
+<td style="text-align:center;">
+70.8
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+47.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+71.7
+</td>
+<td style="text-align:center;">
+72.9
+</td>
+<td style="text-align:center;background-color: rgba(254, 252, 252, 255) !important;">
+-1.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 239, 206, 255) !important;">
+43.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+72.5
+</td>
+<td style="text-align:center;">
+74.3
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 251, 255) !important;">
+-1.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 239, 206, 255) !important;">
+43.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+70.2
+</td>
+<td style="text-align:center;">
+73.5
+</td>
+<td style="text-align:center;background-color: rgba(253, 248, 249, 255) !important;">
+-3.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 236, 207, 255) !important;">
+39.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+66.8
+</td>
+<td style="text-align:center;">
+71.8
+</td>
+<td style="text-align:center;background-color: rgba(253, 244, 245, 255) !important;">
+-5.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 234, 209, 255) !important;">
+34.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+69.8
+</td>
+<td style="text-align:center;">
+75.5
+</td>
+<td style="text-align:center;background-color: rgba(253, 243, 244, 255) !important;">
+-5.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 232, 209, 255) !important;">
+32.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.7
+</td>
+<td style="text-align:center;">
+73.3
+</td>
+<td style="text-align:center;background-color: rgba(253, 245, 246, 255) !important;">
+-4.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 232, 209, 255) !important;">
+32.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+69.6
+</td>
+<td style="text-align:center;">
+75.6
+</td>
+<td style="text-align:center;background-color: rgba(252, 243, 243, 255) !important;">
+-5.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 232, 209, 255) !important;">
+30.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+70.0
+</td>
+<td style="text-align:center;">
+76.5
+</td>
+<td style="text-align:center;background-color: rgba(252, 242, 243, 255) !important;">
+-6.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 231, 210, 255) !important;">
+29.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+69.4
+</td>
+<td style="text-align:center;">
+78.0
+</td>
+<td style="text-align:center;background-color: rgba(252, 238, 239, 255) !important;">
+-8.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 230, 210, 255) !important;">
+27.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.4
+</td>
+<td style="text-align:center;">
+76.3
+</td>
+<td style="text-align:center;background-color: rgba(252, 239, 240, 255) !important;">
+-7.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 228, 211, 255) !important;">
+24.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+63.4
+</td>
+<td style="text-align:center;">
+75.1
+</td>
+<td style="text-align:center;background-color: rgba(250, 231, 232, 255) !important;">
+-11.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(250, 225, 213, 255) !important;">
+17.9
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="lehigh" class="section level2">
+<h2>Lehigh</h2>
+<div id="results-projected-win-total-and-win-probabilities-7" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+17
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+79
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.8%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+235
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+582
+</td>
+<td style="text-align:center;font-weight: bold;">
+5.8%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+1140
+</td>
+<td style="text-align:center;font-weight: bold;">
+11.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+1757
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.6%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1987
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1729
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1318
+</td>
+<td style="text-align:center;font-weight: bold;">
+13.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+689
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+306
+</td>
+<td style="text-align:center;font-weight: bold;">
+3.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+116
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+39
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Lehigh Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.7
+</td>
+<td style="text-align:center;">
+67.6
+</td>
+<td style="text-align:center;background-color: rgba(236, 245, 241, 255) !important;">
+8.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(233, 237, 212, 255) !important;">
+73.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+73.5
+</td>
+<td style="text-align:center;">
+68.5
+</td>
+<td style="text-align:center;background-color: rgba(243, 248, 246, 255) !important;">
+5.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(240, 239, 210, 255) !important;">
+66.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.3
+</td>
+<td style="text-align:center;">
+70.6
+</td>
+<td style="text-align:center;background-color: rgba(243, 249, 246, 255) !important;">
+4.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 239, 209, 255) !important;">
+62.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.3
+</td>
+<td style="text-align:center;">
+72.6
+</td>
+<td style="text-align:center;background-color: rgba(248, 251, 250, 255) !important;">
+2.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(248, 241, 207, 255) !important;">
+57.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+74.9
+</td>
+<td style="text-align:center;">
+73.1
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+1.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 242, 206, 255) !important;">
+54.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.3
+</td>
+<td style="text-align:center;">
+73.5
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+1.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 242, 206, 255) !important;">
+54.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.3
+</td>
+<td style="text-align:center;">
+71.2
+</td>
+<td style="text-align:center;background-color: rgba(252, 253, 252, 255) !important;">
+1.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 242, 205, 255) !important;">
+52.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+73.8
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+0.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+48.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+74.5
+</td>
+<td style="text-align:center;">
+75.0
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+47.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.1
+</td>
+<td style="text-align:center;">
+74.2
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 251, 255) !important;">
+-2.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+42.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+70.1
+</td>
+<td style="text-align:center;">
+71.9
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 251, 255) !important;">
+-1.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+41.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+68.7
+</td>
+<td style="text-align:center;">
+72.1
+</td>
+<td style="text-align:center;background-color: rgba(253, 248, 249, 255) !important;">
+-3.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 236, 208, 255) !important;">
+38.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+71.7
+</td>
+<td style="text-align:center;">
+76.1
+</td>
+<td style="text-align:center;background-color: rgba(253, 246, 246, 255) !important;">
+-4.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 234, 208, 255) !important;">
+34.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+71.5
+</td>
+<td style="text-align:center;">
+76.3
+</td>
+<td style="text-align:center;background-color: rgba(253, 245, 246, 255) !important;">
+-4.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 233, 209, 255) !important;">
+33.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+71.9
+</td>
+<td style="text-align:center;">
+76.8
+</td>
+<td style="text-align:center;background-color: rgba(253, 245, 246, 255) !important;">
+-4.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 233, 209, 255) !important;">
+32.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+71.2
+</td>
+<td style="text-align:center;">
+78.5
+</td>
+<td style="text-align:center;background-color: rgba(252, 240, 241, 255) !important;">
+-7.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 231, 210, 255) !important;">
+29.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+70.5
+</td>
+<td style="text-align:center;">
+76.9
+</td>
+<td style="text-align:center;background-color: rgba(252, 242, 243, 255) !important;">
+-6.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 229, 211, 255) !important;">
+26.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+65.1
+</td>
+<td style="text-align:center;">
+75.6
+</td>
+<td style="text-align:center;background-color: rgba(251, 234, 235, 255) !important;">
+-10.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(250, 225, 213, 255) !important;">
+18.7
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="loyola-maryland" class="section level2">
+<h2>Loyola Maryland</h2>
+<div id="results-projected-win-total-and-win-probabilities-8" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+19
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+96
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+281
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.8%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+633
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+1228
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+1635
+</td>
+<td style="text-align:center;font-weight: bold;">
+16.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+1960
+</td>
+<td style="text-align:center;font-weight: bold;">
+19.6%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1725
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+1296
+</td>
+<td style="text-align:center;font-weight: bold;">
+13.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+703
+</td>
+<td style="text-align:center;font-weight: bold;">
+7.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+288
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.9%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+105
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+24
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+16
+</td>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Loyola MD Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.4
+</td>
+<td style="text-align:center;">
+68.8
+</td>
+<td style="text-align:center;background-color: rgba(232, 243, 238, 255) !important;">
+9.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(232, 237, 212, 255) !important;">
+74.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.4
+</td>
+<td style="text-align:center;">
+70.0
+</td>
+<td style="text-align:center;background-color: rgba(240, 247, 244, 255) !important;">
+6.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(239, 238, 210, 255) !important;">
+66.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.4
+</td>
+<td style="text-align:center;">
+72.1
+</td>
+<td style="text-align:center;background-color: rgba(240, 247, 244, 255) !important;">
+6.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(240, 239, 210, 255) !important;">
+65.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.9
+</td>
+<td style="text-align:center;">
+71.8
+</td>
+<td style="text-align:center;background-color: rgba(243, 248, 246, 255) !important;">
+5.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(241, 239, 209, 255) !important;">
+65.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+78.0
+</td>
+<td style="text-align:center;">
+73.9
+</td>
+<td style="text-align:center;background-color: rgba(245, 250, 248, 255) !important;">
+4.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(245, 240, 208, 255) !important;">
+59.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.8
+</td>
+<td style="text-align:center;">
+74.1
+</td>
+<td style="text-align:center;background-color: rgba(246, 250, 248, 255) !important;">
+3.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(245, 240, 208, 255) !important;">
+59.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+75.3
+</td>
+<td style="text-align:center;">
+72.4
+</td>
+<td style="text-align:center;background-color: rgba(248, 251, 250, 255) !important;">
+2.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(248, 241, 207, 255) !important;">
+56.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.6
+</td>
+<td style="text-align:center;">
+74.8
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+1.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 242, 206, 255) !important;">
+54.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.5
+</td>
+<td style="text-align:center;">
+76.4
+</td>
+<td style="text-align:center;background-color: rgba(252, 253, 252, 255) !important;">
+1.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 242, 205, 255) !important;">
+51.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.8
+</td>
+<td style="text-align:center;">
+75.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 253, 253, 255) !important;">
+-0.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+46.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.9
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 240, 206, 255) !important;">
+46.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+71.6
+</td>
+<td style="text-align:center;">
+73.6
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 251, 255) !important;">
+-1.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 239, 206, 255) !important;">
+43.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.7
+</td>
+<td style="text-align:center;">
+77.2
+</td>
+<td style="text-align:center;background-color: rgba(254, 249, 249, 255) !important;">
+-2.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+41.7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;">
+75.5
+</td>
+<td style="text-align:center;background-color: rgba(254, 251, 251, 255) !important;">
+-2.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 238, 207, 255) !important;">
+41.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.3
+</td>
+<td style="text-align:center;">
+77.3
+</td>
+<td style="text-align:center;background-color: rgba(253, 248, 249, 255) !important;">
+-3.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(253, 237, 207, 255) !important;">
+39.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+74.0
+</td>
+<td style="text-align:center;">
+79.9
+</td>
+<td style="text-align:center;background-color: rgba(252, 243, 243, 255) !important;">
+-5.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 234, 209, 255) !important;">
+34.2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.2
+</td>
+<td style="text-align:center;">
+78.5
+</td>
+<td style="text-align:center;background-color: rgba(253, 244, 245, 255) !important;">
+-5.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(252, 233, 209, 255) !important;">
+32.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+68.1
+</td>
+<td style="text-align:center;">
+77.0
+</td>
+<td style="text-align:center;background-color: rgba(251, 237, 238, 255) !important;">
+-8.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 229, 211, 255) !important;">
+25.9
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+<div id="navy" class="section level2">
+<h2>Navy</h2>
+<div id="results-projected-win-total-and-win-probabilities-9" class="section level3">
+<h3>Results (Projected Win Total and Win Probabilities)</h3>
+<table class="table table-striped table-hover table-condensed table-responsive" style="color: black; width: auto !important; ">
+<caption>
+Projected Patriot League Record Distribution (10,000 Monte Carlo
+Simulations)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Conference Wins
+</th>
+<th style="text-align:center;font-weight: bold;">
+Sim Count
+</th>
+<th style="text-align:center;font-weight: bold;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+3
+</td>
+<td style="text-align:center;">
+1
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;">
+2
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+5
+</td>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+6
+</td>
+<td style="text-align:center;">
+22
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+7
+</td>
+<td style="text-align:center;">
+107
+</td>
+<td style="text-align:center;font-weight: bold;">
+1.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+8
+</td>
+<td style="text-align:center;">
+284
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.8%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+9
+</td>
+<td style="text-align:center;">
+652
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+10
+</td>
+<td style="text-align:center;">
+1218
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+11
+</td>
+<td style="text-align:center;">
+1700
+</td>
+<td style="text-align:center;font-weight: bold;">
+17.0%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+12
+</td>
+<td style="text-align:center;">
+2034
+</td>
+<td style="text-align:center;font-weight: bold;">
+20.3%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+13
+</td>
+<td style="text-align:center;">
+1844
+</td>
+<td style="text-align:center;font-weight: bold;">
+18.4%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+14
+</td>
+<td style="text-align:center;">
+1248
+</td>
+<td style="text-align:center;font-weight: bold;">
+12.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+15
+</td>
+<td style="text-align:center;">
+612
+</td>
+<td style="text-align:center;font-weight: bold;">
+6.1%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+16
+</td>
+<td style="text-align:center;">
+221
+</td>
+<td style="text-align:center;font-weight: bold;">
+2.2%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+17
+</td>
+<td style="text-align:center;">
+47
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.5%
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+18
+</td>
+<td style="text-align:center;">
+4
+</td>
+<td style="text-align:center;font-weight: bold;">
+0.0%
+</td>
+</tr>
+</tbody>
+</table>
+<table class="table table-striped table-hover table-responsive" style="color: black; width: auto !important; border-bottom: 0;">
+<caption>
+Projected Game Outcomes (Average Score, Margin, and Win Probability)
+</caption>
+<thead>
+<tr>
+<th style="text-align:center;font-weight: bold;">
+Opponent
+</th>
+<th style="text-align:center;font-weight: bold;">
+Site
+</th>
+<th style="text-align:center;font-weight: bold;">
+Navy Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Opponent Pts
+</th>
+<th style="text-align:center;font-weight: bold;">
+Avg Margin
+</th>
+<th style="text-align:center;font-weight: bold;">
+Win %
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.2
+</td>
+<td style="text-align:center;">
+62.2
+</td>
+<td style="text-align:center;background-color: rgba(220, 236, 229, 255) !important;">
+15.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(222, 234, 216, 255) !important;">
+84.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+74.9
+</td>
+<td style="text-align:center;">
+63.5
+</td>
+<td style="text-align:center;background-color: rgba(229, 241, 235, 255) !important;">
+11.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(227, 235, 214, 255) !important;">
+80.0
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.5
+</td>
+<td style="text-align:center;">
+65.2
+</td>
+<td style="text-align:center;background-color: rgba(231, 242, 237, 255) !important;">
+10.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(229, 236, 213, 255) !important;">
+78.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.2
+</td>
+<td style="text-align:center;">
+65.4
+</td>
+<td style="text-align:center;background-color: rgba(227, 240, 234, 255) !important;">
+11.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(229, 236, 213, 255) !important;">
+78.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.7
+</td>
+<td style="text-align:center;">
+67.1
+</td>
+<td style="text-align:center;background-color: rgba(232, 243, 238, 255) !important;">
+9.6
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(232, 237, 212, 255) !important;">
+73.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.4
+</td>
+<td style="text-align:center;">
+67.6
+</td>
+<td style="text-align:center;background-color: rgba(234, 244, 240, 255) !important;">
+8.7
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(233, 237, 212, 255) !important;">
+73.1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+77.0
+</td>
+<td style="text-align:center;">
+68.1
+</td>
+<td style="text-align:center;background-color: rgba(234, 244, 240, 255) !important;">
+8.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(234, 237, 212, 255) !important;">
+71.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;">
+65.7
+</td>
+<td style="text-align:center;background-color: rgba(236, 245, 241, 255) !important;">
+8.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(236, 238, 211, 255) !important;">
+70.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+75.4
+</td>
+<td style="text-align:center;">
+68.1
+</td>
+<td style="text-align:center;background-color: rgba(238, 246, 242, 255) !important;">
+7.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(236, 238, 211, 255) !important;">
+69.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+H
+</td>
+<td style="text-align:center;">
+76.2
+</td>
+<td style="text-align:center;">
+69.3
+</td>
+<td style="text-align:center;background-color: rgba(239, 246, 243, 255) !important;">
+6.9
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(240, 239, 210, 255) !important;">
+65.5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+71.7
+</td>
+<td style="text-align:center;">
+66.9
+</td>
+<td style="text-align:center;background-color: rgba(243, 249, 246, 255) !important;">
+4.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 239, 209, 255) !important;">
+63.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;">
+68.7
+</td>
+<td style="text-align:center;background-color: rgba(243, 249, 246, 255) !important;">
+5.0
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(243, 240, 208, 255) !important;">
+62.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.3
+</td>
+<td style="text-align:center;">
+68.5
+</td>
+<td style="text-align:center;background-color: rgba(245, 250, 248, 255) !important;">
+3.8
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(245, 240, 208, 255) !important;">
+60.4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.4
+</td>
+<td style="text-align:center;">
+70.9
+</td>
+<td style="text-align:center;background-color: rgba(249, 252, 250, 255) !important;">
+2.5
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(249, 241, 206, 255) !important;">
+55.6
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.7
+</td>
+<td style="text-align:center;">
+71.5
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+2.2
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(250, 241, 206, 255) !important;">
+54.8
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston U
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+73.0
+</td>
+<td style="text-align:center;">
+70.9
+</td>
+<td style="text-align:center;background-color: rgba(250, 252, 251, 255) !important;">
+2.1
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(251, 242, 206, 255) !important;">
+54.3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.0
+</td>
+<td style="text-align:center;">
+71.6
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+0.4
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(255, 243, 205, 255) !important;">
+49.9
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American
+</td>
+<td style="text-align:center;">
+A
+</td>
+<td style="text-align:center;">
+72.7
+</td>
+<td style="text-align:center;">
+73.0
+</td>
+<td style="text-align:center;background-color: rgba(254, 254, 254, 255) !important;">
+-0.3
+</td>
+<td style="text-align:center;font-weight: bold;background-color: rgba(254, 241, 205, 255) !important;">
+47.9
+</td>
+</tr>
+</tbody>
+<tfoot>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<span style="font-style: italic;">Note: </span>
+</td>
+</tr>
+<tr>
+<td style="padding: 0; " colspan="100%">
+<sup></sup> Color scale: green = more favorable, red = less favorable.
+</td>
+</tr>
+</tfoot>
+</table>
+</div>
+</div>
+</div>
+<div id="final-standings" class="section level1">
+<h1>Final Standings</h1>
+<p>So, if every Patriot League team finishes with their most likely
+record, the conference standings will look something like this:</p>
+<table>
+<caption>2025-26 Projected Patriot League Standings</caption>
+<thead>
+<tr class="header">
+<th align="center">Rank</th>
+<th align="center">Team</th>
+<th align="center">Conference Record</th>
+<th align="center">Overall Record</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="center">1</td>
+<td align="center">Navy</td>
+<td align="center">12-6</td>
+<td align="center">20-11</td>
+</tr>
+<tr class="even">
+<td align="center">2</td>
+<td align="center">American</td>
+<td align="center">10-8</td>
+<td align="center">17-14</td>
+</tr>
+<tr class="odd">
+<td align="center">3</td>
+<td align="center">Colgate</td>
+<td align="center">10-8</td>
+<td align="center">16-15</td>
+</tr>
+<tr class="even">
+<td align="center">4</td>
+<td align="center">Army</td>
+<td align="center">9-9</td>
+<td align="center">15-16</td>
+</tr>
+<tr class="odd">
+<td align="center">5</td>
+<td align="center">Boston U</td>
+<td align="center">9-9</td>
+<td align="center">14-17</td>
+</tr>
+<tr class="even">
+<td align="center">6</td>
+<td align="center">Loyola MD</td>
+<td align="center">9-9</td>
+<td align="center">13-18</td>
+</tr>
+<tr class="odd">
+<td align="center">7</td>
+<td align="center">Lehigh</td>
+<td align="center">8-10</td>
+<td align="center">12-19</td>
+</tr>
+<tr class="even">
+<td align="center">8</td>
+<td align="center">Holy Cross</td>
+<td align="center">7-11</td>
+<td align="center">12-19</td>
+</tr>
+<tr class="odd">
+<td align="center">9</td>
+<td align="center">Lafayette</td>
+<td align="center">7-11</td>
+<td align="center">10-21</td>
+</tr>
+<tr class="even">
+<td align="center">10</td>
+<td align="center">Bucknell</td>
+<td align="center">6-12</td>
+<td align="center">9-22</td>
+</tr>
+</tbody>
+</table>
+<p>Taking every team’s most likely record into account, Lafayette is
+projected to finish <span class="math inline">\(9^{th}\)</span> in the
+Patriot League this season. However, there is some wiggle room, given
+that teams may finish with a few more wins and/or losses than what is
+seen here. With that said, the conference will be close this season (six
+games separating the <span class="math inline">\(10\)</span> teams), so
+winning the favorable games on your schedule will be more important than
+ever. If you can pick up a couple wins in less favorable conditions, it
+will go a long way in shoring up a solid conference record. Bottom line?
+Control what you can control, win the games you should win, and remember
+that it’s a long slate of games coming up.</p>
 </div>
 
 
