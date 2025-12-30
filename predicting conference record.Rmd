@@ -1,0 +1,2079 @@
+---
+title: "Simulating the Patriot League Schedule"
+author: "Noah Seaner"
+date: "12/29/2025"
+output: html_document
+---
+# Introduction
+
+## Lafayette's Season So Far
+
+As of December 28, every team in the Patriot League has finished their non-conference schedule. With a tough non-conference schedule featuring strong opponents, Lafayette sits at 3-10 heading into conference play, combining a 3-3 home record with an 0-7 road record, compiling wins against Division III Dickinson, as well as Ball State and Mercyhurst. The 0-7 record away from the Kirby Sports Center is mostly in part due to the tough teams on the schedule, playing Saint Joseph's, West Virginia, Texas, and Georgia Tech away from home. Other than those games, Lafayette has shown strong resilience on the road, showing that they can stay in games until the end, a strong sign for the games that ultimately matter in the Patriot League.
+
+## The Data
+
+The data we will be looking at in this simulation comes from every single game that a Patriot League team (including Lafayette) has played this season. For each game, I noted the amount of points each team scored and gave up, as well as field goal attempts, three-point attempts, free throw attempts, offensive rebounds, and turnovers. Using these stats, I estimated possessions, offensive rating, and defensive rating for each team and for each game using the following formulas: $$\text{POS} = \text{FGA}+0.44\cdot\text{FTA}-\text{ORB}+\text{TOV},$$ $$\text{Off Rtg} = \frac{\text{PTS}}{\text{POS}}\cdot 100,$$ $$\text{Def Rtg} = \frac{\text{PTS Allowed}}{\text{Possessions}}\cdot 100.$$ From there, I calculated the means and standard deviations of each team's possessions, offensive rating, and defensive rating, which we will use to simulate hypothetical matchups between Lafayette and the other Patriot League teams. 
+
+## Methodology
+
+To estimate Lafayette's conference record, as well as game-by-game stats, we will be using the Monte Carlo method, a common tool in predictive statistics. Without getting into the theory too much, the Monte Carlo method answers the question of "what might happen?". In other words, you might know how something usually behaves, but not quite what it will do next. So, to predict it, you repeat a random experiment thousands of times using what you know, and then look at patterns in the results to understand likely outcomes. 
+
+In this case, we will be simulating each game of Lafayette's conference schedule $10,000$ times (this is the usual number of iterations in most Monte Carlo situations) to see not only how many wins the team may accrue, but also the likely scores and win probabilities for each game on the schedule, based on the offensive and defensive efficiency of each Patriot League team so far this season. 
+
+# The Simulation
+
+## Lafayette
+
+```{r, warning=FALSE, message=FALSE}
+# this is the simulation used for every Patriot League team's schedule, I'm only showing Lafayette's since there all the same
+
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123) # for reproducibility
+n_sims <- 10000
+home_court_adv <- 2.5 # tunable effect of home-court advantage
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% ## one sheet for non-conference games
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Lafayette PL sched") %>% ## sheet for Lafayette's conference schedule
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% ## offensive/defensive rating and tempo for each Patriot League team
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% ## joining Lafayette's ratings and their opponents ratings to the schedule sheet
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate( ## labeling home and away games for the sake of home-court advantage
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  # finding means and standard deviations for possessions, team efficiency, and opponent efficiency
+  # using parameters mean = (a + b) / 2 and sd = sqrt(a^2 + b^2) / 2
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix( # simulating possessions for each game from a random normal distribution
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( # simulating Lafayette's efficiency for each game from a random normal distribution
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix( # simulating opponent efficiency for each game from a random normal distribution
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100) # converting efficiency to points scored and allowed
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L # counting wins and losses
+
+  out <- tibble::tibble( ## keeps track of everything that was simulated in a table
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000) # Monte Carlo simulation for 10,000 iterations
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+After running $10,000$ iterations of Lafayette's conference schedule, the simulation predicts that the Leopards are most likely to finish with anywhere from six to nine wins; about $68\%$ of the simulations fell in that range. This would put the team three games under $.500$ at worst and dead on $.500$ at best. Therefore, it would be an overachievement to finish above $.500$ in conference games this season; although, it is not entirely out of the question to finish with at least $10$ wins. There were $1,650$ instances - good for a $16.5\%$ chance - where the team procured double-digit wins in conference play, with the most being $16$ out of $18$ games. Meanwhile, there were $1,537$ instances - thus a $15.37\%$ chance - where the team won at most five games, with one instance where the team lost all of their conference games. What this means is that if the team doesn't fall in the most likely range of wins, they are slightly more likely to finish with more wins than less, which is very encouraging.
+
+In conclusion, the simulation has the team in and around $.500$, which is great considering the near majority of first-year players in the team. If they can get going alongside the senior players, they are more than capable of making noise in Patriot League play this season. 
+
+```{r}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Lafayette Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Lafayette Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+The Leopards' most favorable conference games are their home games. In the simulation, they won more than half the time in their home games against Bucknell, Holy Cross, Lehigh, Boston U, and Army, as well as nearly half of their home games against Loyola. Winning the games that we have a better chance of winning is important, especially when they're on home court. Taking advantage of these games builds morale and confidence, which is crucial for a team that has a lot of first-year players meshing with veteran presence. 
+
+On the flip side, the team's least favorable games are on the road, with the team losing by about $5$ points on average in seven of their nine road games, the most difficult being the road games against Navy, Colgate, American, Loyola, and Boston. Preparing for these games is incredibly important as well, given the difficulty of the opponent and the team's lack of road success last season and so far this year. The effect of winning these games would be the same as winning the games you're supposed to win, but tenfold given the circumstances of not being favored. It gives a team all the confidence in the world going on the road and beating an opponent as the underdog.
+
+## American
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "American") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000) 
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>%
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% 
+  mutate(
+    `American Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `American Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) 
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) 
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Army
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Army") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { 
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>%
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Army Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Army Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Boston U
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Boston") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Boston U Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Boston U Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Bucknell
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Bucknell") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Bucknell Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Bucknell Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Colgate
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Colgate") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Colgate Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Colgate Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Holy Cross
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Holy Cross") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Holy Cross Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Holy Cross Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Lehigh
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Lehigh") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Lehigh Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Lehigh Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Loyola Maryland
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Loyola") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Loyola MD Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Loyola MD Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+## Navy
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(stringr)
+
+set.seed(123)
+n_sims <- 10000
+home_court_adv <- 2.5 
+min_possessions <- 55
+max_possessions <- 85
+
+games_hist <- read_excel("conference record sim.xlsx", sheet = "PL non-conf sched") %>% 
+  mutate(Date = as.Date(Date))
+
+sched <- read_excel("conference record sim.xlsx", sheet = "Navy") %>% 
+  mutate(Date = as.Date(Date))
+
+ratings <- read_excel("conference record sim.xlsx", sheet = "Other PL Teams") %>% 
+  mutate(Team = str_trim(Team))
+
+sched <- sched %>%
+  mutate(
+    Team = str_trim(as.character(Team)),
+    Opponent = str_trim(as.character(Opponent)),
+    Home_Away = str_trim(as.character(Home_Away))
+  )
+
+ratings <- ratings %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+sched_sim <- sched %>% 
+  left_join(
+    ratings %>% rename_with(~ paste0("team_", .), -Team),
+    by = c("Team" = "Team")
+  ) %>%
+  left_join(
+    ratings %>% rename_with(~ paste0("opp_", .), -Team),
+    by = c("Opponent" = "Team")
+  ) %>%
+  mutate(
+    hca_team = case_when(Home_Away == "H" ~ home_court_adv,
+                         Home_Away == "A" ~ -home_court_adv,
+                         TRUE             ~ 0
+  ),
+  hca_opp = -hca_team
+)
+
+sim_scores <- function(sched_sim, n_sims = 10000,
+                                 min_poss = 55, max_poss = 85) { ## vectorized function to simulate games
+
+  n_games <- nrow(sched_sim)
+
+  poss_mean <- (sched_sim$team_Possessions_Mean + sched_sim$opp_Possessions_Mean) / 2
+  poss_sd   <- sqrt(sched_sim$team_Possessions_SD^2 +
+                    sched_sim$opp_Possessions_SD^2) / 2
+
+  team_eff_mean <- (sched_sim$team_Off_Rtg_Mean + sched_sim$opp_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_team
+  team_eff_sd   <- sqrt(sched_sim$team_Off_Rtg_SD^2 +
+                        sched_sim$opp_Def_Rtg_SD^2) / 2
+
+  opp_eff_mean  <- (sched_sim$opp_Off_Rtg_Mean + sched_sim$team_Def_Rtg_Mean) / 2 +
+                   sched_sim$hca_opp
+  opp_eff_sd    <- sqrt(sched_sim$opp_Off_Rtg_SD^2 +
+                        sched_sim$team_Def_Rtg_SD^2) / 2
+
+  poss <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(poss_mean, each = n_sims),
+          sd   = rep(poss_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  team_eff <- matrix( 
+    rnorm(n_sims * n_games,
+          mean = rep(team_eff_mean, each = n_sims),
+          sd   = rep(team_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  opp_eff <- matrix(
+    rnorm(n_sims * n_games,
+          mean = rep(opp_eff_mean, each = n_sims),
+          sd   = rep(opp_eff_sd,   each = n_sims)),
+    nrow = n_sims, ncol = n_games
+  )
+
+  team_score <- round(poss * team_eff / 100)
+  opp_score  <- round(poss * opp_eff  / 100)
+
+  team_score[team_score < 0] <- 0
+  opp_score[opp_score < 0]   <- 0
+
+  win <- (team_score > opp_score) * 1L 
+
+  out <- tibble::tibble( 
+    sim_id      = rep(seq_len(n_sims), times = n_games),
+    game_index  = rep(seq_len(n_games), each  = n_sims),
+    possessions = as.vector(poss),
+    Team_Score  = as.vector(team_score),
+    Opp_Score   = as.vector(opp_score),
+    Win         = as.vector(win)
+  )
+
+  sched_rep <- sched_sim[rep(seq_len(n_games), each = n_sims),
+                         c("Game_ID","Date","Team","Opponent","Home_Away")]
+
+  dplyr::bind_cols(sched_rep, out %>% dplyr::select(-game_index))
+}
+
+sim_results <- sim_scores(sched_sim, n_sims=10000)
+```
+
+### Results (Projected Win Total and Win Probabilities)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+library(scales)
+
+record_dist <- sim_results %>% ## table showing the percentage of sims that had the team winning certain amounts of games
+  group_by(sim_id) %>%
+  summarise(wins = sum(Win), losses = n() - wins, .groups = "drop") %>%
+  count(wins) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(wins)
+
+record_dist %>%
+  arrange(wins) %>%
+  mutate(
+    Probability = percent(prob, accuracy = 0.1),
+    'Sim Count' = n
+  ) %>%
+  select('Conference Wins' = wins, 'Sim Count', Probability) %>%
+  kbl(
+    format = "html",
+    caption = "Projected Patriot League Record Distribution (10,000 Monte Carlo Simulations)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+matchup_summary <- sim_results %>% ## table showing the average score and win probability for each game
+  group_by(Opponent, Home_Away) %>%
+  summarise(
+    avg_team_pts = mean(Team_Score),
+    avg_opp_pts = mean(Opp_Score),
+    avg_margin = mean(Team_Score - Opp_Score),
+    win_prob = mean(Win),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(win_prob))
+
+matchup_pretty <- matchup_summary %>% ## rounds everything to one decimal place for readability
+  mutate(
+    `Navy Pts` = round(avg_team_pts, 1),
+    `Opponent Pts`  = round(avg_opp_pts, 1),
+    `Avg Margin`    = round(avg_margin, 1),
+    `Win %`         = round(win_prob * 100, 1)
+  ) %>%
+  select(
+    Opponent, Site = Home_Away,
+    `Navy Pts`, `Opponent Pts`, `Avg Margin`, `Win %`
+  )
+
+win_colors <- colorRampPalette(c("#f8d7da", "#fff3cd", "#d1e7dd"))(101) ## adds a red -> green color scale
+margin_colors <- colorRampPalette(c("#f8d7da", "#ffffff", "#d1e7dd"))(101)
+
+win_idx <- pmin(pmax(round(matchup_pretty$`Win %`) + 1, 1), 101) ## links win probability to the color scale
+mrg_idx <- pmin(
+  pmax(round((matchup_pretty$`Avg Margin` + 20) / 40 * 100) + 1, 1),
+  101
+)
+
+matchup_pretty %>%
+ kbl(
+    format = "html",
+    caption = "Projected Game Outcomes (Average Score, Margin, and Win Probability)",
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(5, background = margin_colors[mrg_idx]) %>%
+  column_spec(6, background = win_colors[win_idx], bold = TRUE) %>%
+  footnote(
+    general = "Color scale: green = more favorable, red = less favorable."
+  )
+```
+
+# Final Standings
+
+So, if every Patriot League team finishes with their most likely record, the conference standings will look something like this:
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(knitr)
+
+conf_standings <- data.frame(Place = c(1,2,3,4,5,6,7,8,9,10), Team = c("Navy", "American", "Colgate", "Army", "Boston U", "Loyola MD", "Lehigh", "Holy Cross", "Lafayette", "Bucknell"), Conf_Record = c("12-6", "10-8", "10-8", "9-9", "9-9", "9-9", "8-10", "7-11", "7-11", "6-12"), Overall_Record = c("20-11", "17-14", "16-15", "15-16", "14-17", "13-18", "12-19", "12-19", "10-21", "9-22"))
+
+kable(conf_standings, caption = "2025-26 Projected Patriot League Standings", col.names = c("Rank", "Team", "Conference Record", "Overall Record"), align = "c")
+```
+
+Taking every team's most likely record into account, Lafayette is projected to finish $9^{th}$ in the Patriot League this season. However, there is some wiggle room, given that teams may finish with a few more wins and/or losses than what is seen here. With that said, the conference will be close this season (six games separating the $10$ teams), so winning the favorable games on your schedule will be more important than ever. If you can pick up a couple wins in less favorable conditions, it will go a long way in shoring up a solid conference record. Bottom line? Control what you can control, win the games you should win, and remember that it's a long slate of games coming up.
