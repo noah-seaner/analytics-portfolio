@@ -1,7 +1,7 @@
 # Grammy Website Analytics & KPI Evaluation (Excel)
 
 ## Project Overview
-This project analyzes web traffic and engagement data from two Recording Academy websites (grammy.com and recordingacademy.com) to evaluate performance and identify opportunities for growth. The analysis focused on transforming raw website data into business-relevant KPIs and using those metrics to generate actionable recommendations
+This project analyzes web traffic and engagement data from two Recording Academy-owned websites (grammy.com and recordingacademy.com) to evaluate performance and identify opportunities for growth. The analysis focused on transforming raw website data into business-relevant KPIs and using those metrics to generate actionable recommendations
 
 The project also included benchmarking against a competitor website and conducting a statistical A/B test to assess differences in engagement between the two platforms.
 
@@ -31,10 +31,10 @@ To transform website analytics data into meaningful business KPIs and evaluate h
 - Assessed whether observed differences in engagement were statistically significant
 
 ## Key Insights
-- Website traffic exhibited clear spikes around the Grammy Awards, confirming the strong impact of major events on user engagement
-- Engagement metrics differed between grammy.com and recordingacademy.com, suggesting distinct user behavior patterns across the two platforms
-- Competitor benchmarking highlighted potential areas where engagement and session depth could be improved
-- The A/B test provided statistical evidence regarding differences in pages per session, supporting data-driven recommendations for site optimization
+- Daily visitor trends showed pronounced spikes around the Grammy Awards, with traffic on event days reaching roughly 43 times higher than baseline levels
+- Engagement metrics differed between grammy.com and recordingacademy.com, with grammy.com averaging fewer pages per session and lower average session duration, indicating differing user behavior patterns
+- Competitor benchmarking suggested that key engagement KPIs (e.g., pages per session, session duration) are lower relative to theAMAs.com, highlighting opportunities for improvement
+- The A/B test on pages per session indicated that the difference between the two sites was statistically significant at the chosen significance level, supporting data-driven recommendation for site optimization
 
 ## Notes
 This projects demonstrates a full business analytics workflow in Excel, including KPI engineering, exploratory analysis, benchmarking, and statistical testing to support strategic decision-making for digital platforms.
