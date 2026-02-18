@@ -15,3 +15,5 @@ This project focuses on predicting outcomes of conference games using game-level
 
 ### Bayesian Analysis of Torpedo Bats in MLB (R)
 In this analysis, I used Bayesian statistical methods to examine the impact of the torpedo bats on offensive production in Major League Baseball. The goal was to assess whether the observed performance spike was meaningful or just a temporary fluctuation, while explicitly modeling uncertainty in the estimates.
+
+All of these projects reflect my interest in combining statistical modeling with real-world decision contexts, particularly in sports and performance analytics.
