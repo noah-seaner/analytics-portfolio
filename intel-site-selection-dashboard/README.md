@@ -29,9 +29,9 @@ The dashboard consisted of three visual components:
    Displayed monthly energy generation by energy form for 2022, with dropdown filters for region and month. This allowed for exploration of seasonal patterns and variability in energy production.
 
 ## Key Insights
-- Some regions combined higher overall energy output with a strong renewable energy share, making them attractive candidates for sustainable infrastructure
-- Seasonal variability in certain energy types highlighted potential stability considerations for continuous data center operations
-- Interactive filtering enabled side-by-side comparisons of regions and energy sources to support informed site selection decisions
+- Regions with the highest net energy production also tended to exhibit more stable monthly generated profiles, indicating stronger capacity for continuous data center operations
+- Renewable energy share varied substantially across regions, with some areas generating over 30% of total energy from renewable sources, improving long-term sustainability prospects
+- Time-series analysis revealed seasonal fluctuations in certain energy types, highlighting potential variability risks that would need to be considered in infrastructure planning
 
 ## Notes
 This project demonstrates how interactive dashboards can be used to evaluate operational and sustainability trade-offs in infrastructure planning, even when working with aggregated regional data.
