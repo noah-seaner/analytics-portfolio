@@ -4,6 +4,8 @@ Welcome to my analytics portfolio! This repository contains a curated selection 
 
 While some projects focus on sports performance and predictive modeling, others explore business and operational analytics across different industries. Together, they showcase how I approach analytical problems: start with a clear question, choose the right tools, and communicate results in a way that supports decision-making.
 
+## Featured Projects
+
 ### Grammy Website Analytics & KPI Evaluation
 A business analytics project using Excel to transform website traffic data into KPIs, benchmark engagement metrics across multiple websites, and conduct statistical testing to inform recommendations for improving digital performance.
 
