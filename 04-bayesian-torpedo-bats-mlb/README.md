@@ -15,7 +15,7 @@ To assess whether changes in batting average (BA), on-base percentage (OBP), and
 ## Methods
 - Selected a group of MLB players who consistently used the torpedo bats
 - Compiled their BA, OBP, and SLG from the 2024 season and from the games played in 2025 up to May
-- Built a Bayesian hierarchical regression model with random effects for season
+- Built a Bayesian hierarchical regression model for each statistic using random effects for season
 - Used MCMC sampling to estimate posterior distribution of model coefficients
 - Evaluated convergence and effective sample size using coda and MCMCvis diagnostics
 
