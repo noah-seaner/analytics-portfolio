@@ -9,14 +9,22 @@ While some projects focus on sports performance and predictive modeling, others 
 ### Grammy Website Analytics & KPI Evaluation
 A business analytics project using Excel to transform website traffic data into KPIs, benchmark engagement metrics across multiple websites, and conduct statistical testing to inform recommendations for improving digital performance.
 
+[View Project ->](./01-grammys-website-analytics)
+
 ### Intel Data Center Site Selection Dashboard
 An interactive Tableau dashboard that compares regional energy production, renewable energy share, and monthly generation trends to support infrastructure planning and site selection decisions.
+
+[View Project ->](./02-intel-site-selection-dashboard)
 
 ### Conference Record Prediction & Simulation Model (R)
 A simulation-based forecasting project that estimates possible conference outcomes using team performance metrics. The model is updated iteratively throughout the season to reflect new game data and evolving team performance.
 
+[View Project ->](./03-conference-record-simulation)
+
 ### Bayesian Analysis of Torpedo Bats in MLB (R)
 An analysis of offensive performance for MLB players who adopted torpedo bats, comparing statistics across seasons and accounting for player-level variability to observe whether observed changes were meaningful.
+
+[View Project ->](./04-bayesian-torpedo-bats-mlb)
 
 ## Tools & Approaches
 - R for data analysis, modeling, and simulations
