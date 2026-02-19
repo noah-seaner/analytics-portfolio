@@ -20,6 +20,9 @@ To assess whether changes in batting average (BA), on-base percentage (OBP), and
 - Evaluated convergence and effective sample size using coda and MCMCvis diagnostics
 
 ## Key Insights
+- Posterior estimates indicated modest changes in BA, OBP, and SLG, with no credible intervals for coefficients overlapping zero
+- Players that were frequently using the torpedo bat had higher BA and SLG than the league average (as of May 3, 2025)
+- Effective sample size diagnostics confirmed stable MCMC convergence, supporting the reliability of posterior estimates despite early-season limitations 
 
 ## Notes
 This project demonstrates the application of Bayesian mixed-effects modeling in a sports analytics context, with a focus on uncertainty quantifications and convergence diagnostics using MCMC effects.
