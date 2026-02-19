@@ -21,7 +21,7 @@ To assess whether changes in batting average (BA), on-base percentage (OBP), and
 
 ## Key Insights
 - Posterior estimates indicated modest changes in BA, OBP, and SLG, with no credible intervals for coefficients overlapping zero
-- Players that were frequently using the torpedo bat had higher BA and SLG than the league average (as of May 3, 2025)
+- Players that were frequently using the torpedo bat had higher BA and SLG than the league average (as of May 2, 2025)
 - Effective sample size diagnostics confirmed stable MCMC convergence, supporting the reliability of posterior estimates despite early-season limitations 
 
 ## Notes
