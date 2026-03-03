@@ -1,0 +1,830 @@
+---
+title: "Predicting the Patriot League Tournament"
+author: "Noah Seaner"
+date: "`r format(Sys.Date(), '%m/%d/%Y')`"
+output: html_document
+---
+
+# Introduction
+
+## Lafayette's Season Recap
+
+Upon the completion of the regular season, Lafayette finished with an overall record of 11-20 and a conference record of 8-10, placing them $7^{\text{th}}$ in the Patriot League. With this seed, the Leopards will host the $10^{\text{th}}$-seeded Holy Cross Crusaders in a first round matchup in the conference tournament, with the winner advancing to the quarterfinals to take on the $2^{\text{nd}}$-seeded Lehigh Mountain Hawks. The Leopards enter the tournament on a good run of form, having won three of their last four games.
+
+Against Patriot League opponents, Lafayette boasted a 3-6 record at home - wins coming against Bucknell, Army, and Holy Cross - and a 5-4 record on the road - wins coming against American, Colgate, Holy Cross, Loyola, and Army - and looking at the bracket, that may be a beneficial thing for the team. In addition to their first round game, the only other game that Lafayette could host would be the championship game should Bucknell or Army also make it there, so realistically speaking, the Leopards will most likely be on the road for the remainder of the conference tournament, should they win their first round game.
+
+With that said, it's the eve of the Patriot League tournament, so let's predict which team will represent the conference at the NCAA tournament!
+
+## The Data
+
+The data we will be using is the same as what we've been using to simulate the conference schedule.
+
+To recap, I recorded select box score data from every Patriot League team's in-conference games this season. For each game, I noted the team and their opponent, the date of the game, whether the team was home or away, the amount of points the team scored and allowed; the amount of field goals, three-pointers, and free throws attempted by the team; the amount of offensive rebounds the team grabbed, and the number of turnovers committed by the team.
+
+For each game, I also aggregated three stats: possessions, offensive rating, and defensive rating. I calculated possessions by factoring in a team's field goals and free throws attempted, offensive rebounds grabbed, and turnovers committed in any given game, i.e., $$\text{POS} = \text{FGA} + 0.44(\text{FTA}) + \text{ORB} - \text{TOV}.$$ To get offensive rating, I divided the amount of points a team scored by the number of possessions, i.e., $$\text{OFF Rtg} = \frac{\text{PTS}}{\text{POS}} * 100,$$ and to get defensive rating, I divided the amount of points a team allowed by the number of possessions, i.e., $$\text{DEF Rtg} = \frac{\text{PTS All}}{\text{POS}} * 100.$$
+
+## Methodology
+
+The Patriot League tournament works as follows:
+
+* First Round
+    * Contested between the bottom four teams in the conference standings
+    * The $7$-seed (Lafayette) hosts the $10$-seed (Holy Cross).
+    * The $8$-seed (Bucknell) hosts the $9$-seed (Army).
+* Quarterfinals
+    * The winner of $7/10$ plays the $2$-seed (Lehigh).
+    * The winner of $8/9$ plays the $1$-seed (Navy).
+    * The $3$-seed (Colgate) hosts the $6$-seed (Loyola).
+    * The $4$-seed (American) hosts the $5$-seed (Boston).
+* Semifinals
+    * The winner of $1/8/9$ faces the winner of $4/5$.
+    * The winner of the $2/7/10$ faces the winner of $3/6$.
+* Championship
+    * The winner of $1/8/9$ vs. $4/5$ faces the winner of $2/7/10$ vs. $3/6$.
+
+We will be using the same Monte Carlo method to predict the conference tournament, using the means and standard deviations of every team's offensive rating, defensive rating, and possessions to predict how hypothetical matchups would play out, factoring in home-court-advantage as well. After $10,000$ simulations, we'll take a look at the following:
+
+* Tournament Odds
+    * We will see the number of simulations in which each team reached the semifinals, the championship game, and won the conference championship.
+* Head-to-Head Matchups
+    * We will tabulate every possible matchup that can occur in this tournament, analyzing the round in which the matchup would occur, the amount of times each matchup happened, and the average points scored by both teams in the hypothetical game.
+* Brackets
+    * We will observe the **most common bracket outcome** for the Patriot League tournament. Think of this like the mode, i.e., the bracket that occurred the most.
+    * We will also observe the **most likely bracket outcome** for the Patriot League tournament. In other words, this is the bracket that has the most accurate outcome, not necessarily the one that occurred the most.
+
+# Simulating the Tournament
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(magick)
+
+ratings <- read_excel("conf record sim update.xlsx", sheet = "PL Team Stats") %>%
+  mutate(Team = str_trim(as.character(Team)))
+
+seeds <- tibble(
+  Seed = 1:10,
+  Team = c("Navy", "Lehigh", "Colgate", "Boston", "American", "Loyola", "Lafayette", "Bucknell", "Army", "Holy Cross")
+)
+
+set.seed(123)
+
+stopifnot(nrow(seeds) == 10)
+missing_ratings <- setdiff(seeds$Team, ratings$Team)
+if(length(missing_ratings) > 0){
+  stop("These seeded teams are missing from ratings: ", paste(missing_ratings, collapse = ", "))
+}
+
+r <- ratings %>% distinct(Team, .keep_all = TRUE)
+
+off_m  <- setNames(r$Off_Rtg_Mean, r$Team)
+off_sd <- setNames(r$Off_Rtg_SD, r$Team)
+def_m  <- setNames(r$Def_Rtg_Mean, r$Team)
+def_sd <- setNames(r$Def_Rtg_SD, r$Team)
+pos_m  <- setNames(r$Possessions_Mean, r$Team)
+pos_sd <- setNames(r$Possessions_SD, r$Team)
+
+team_of <- setNames(seeds$Team, as.character(seeds$Seed))  # "1" -> team name
+seed_of <- setNames(seeds$Seed, seeds$Team)                # team name -> seed
+
+sim_game <- function(home, away, hca = 2.5, min_poss = 55, max_poss = 85) {
+ 
+  N <- length(home)
+
+  combine_mean <- function(a, b) (a + b) / 2
+  combine_sd   <- function(a, b) sqrt(a^2 + b^2) / 2
+
+  # possessions
+  home_pos_m <- pos_m[home]; home_pos_sd <- pos_sd[home]
+  away_pos_m <- pos_m[away]; away_pos_sd <- pos_sd[away]
+
+  poss_mean <- combine_mean(home_pos_m, away_pos_m)
+  poss_sd_  <- combine_sd(home_pos_sd, away_pos_sd)
+
+  poss <- rnorm(N, poss_mean, poss_sd_)
+  poss <- pmin(pmax(poss, min_poss), max_poss)
+
+  # efficiencies (points / 100)
+  home_eff_mean <- combine_mean(off_m[home], def_m[away]) + hca
+  home_eff_sd_  <- combine_sd(off_sd[home], def_sd[away])
+
+  away_eff_mean <- combine_mean(off_m[away], def_m[home]) - hca
+  away_eff_sd_  <- combine_sd(off_sd[away], def_sd[home])
+
+  home_eff <- rnorm(N, home_eff_mean, home_eff_sd_)
+  away_eff <- rnorm(N, away_eff_mean, away_eff_sd_)
+
+  home_score <- round(poss * home_eff / 100)
+  away_score <- round(poss * away_eff / 100)
+
+  home_score[home_score < 0] <- 0
+  away_score[away_score < 0] <- 0
+
+  # handles overtime
+  ties <- home_score == away_score
+  if (any(ties)) {
+    flip <- runif(sum(ties)) < 0.5
+    home_score[ties] <- home_score[ties] + as.integer(flip)
+    away_score[ties] <- away_score[ties] + as.integer(!flip)
+  }
+
+  winner <- ifelse(home_score > away_score, home, away)
+
+  list(
+    home = home,
+    away = away,
+    home_score = home_score,
+    away_score = away_score,
+    winner = winner
+  )
+}
+
+sim_tourney <- function(n_sims = 10000, hca = 2.5) {
+
+  N <- n_sims
+
+  # first round
+  r1_g1 <- sim_game(home = rep(team_of[["8"]], N),
+                        away = rep(team_of[["9"]], N),
+                        hca = hca)            # 8 hosts 9
+
+  r1_g2 <- sim_game(home = rep(team_of[["7"]], N),
+                        away = rep(team_of[["10"]], N),
+                        hca = hca)            # 7 hosts 10
+
+  w_89  <- r1_g1$winner
+  w_710 <- r1_g2$winner
+
+  # quarterfinals
+  qf_g1 <- sim_game(home = rep(team_of[["1"]], N),
+                        away = w_89,
+                        hca = hca)            # 1 hosts 8/9
+
+  qf_g2 <- sim_game(home = rep(team_of[["4"]], N),
+                        away = rep(team_of[["5"]], N),
+                        hca = hca)            # 4 hosts 5
+
+  qf_g3 <- sim_game(home = rep(team_of[["3"]], N),
+                        away = rep(team_of[["6"]], N),
+                        hca = hca)            # 3 hosts 6
+
+  qf_g4 <- sim_game(home = rep(team_of[["2"]], N),
+                        away = w_710,
+                        hca = hca)            # 2 hosts 7/10
+
+  w_qf1 <- qf_g1$winner
+  w_qf2 <- qf_g2$winner
+  w_qf3 <- qf_g3$winner
+  w_qf4 <- qf_g4$winner
+
+  # semifinals
+  host_sf1 <- ifelse(seed_of[w_qf1] < seed_of[w_qf2], w_qf1, w_qf2)
+  away_sf1 <- ifelse(host_sf1 == w_qf1, w_qf2, w_qf1)
+
+  host_sf2 <- ifelse(seed_of[w_qf3] < seed_of[w_qf4], w_qf3, w_qf4)
+  away_sf2 <- ifelse(host_sf2 == w_qf3, w_qf4, w_qf3)
+
+  sf_g1 <- sim_game(home = host_sf1, away = away_sf1, hca = hca)
+  sf_g2 <- sim_game(home = host_sf2, away = away_sf2, hca = hca)
+
+  w_sf1 <- sf_g1$winner
+  w_sf2 <- sf_g2$winner
+
+  # championship
+  host_f <- ifelse(seed_of[w_sf1] < seed_of[w_sf2], w_sf1, w_sf2)
+  away_f <- ifelse(host_f == w_sf1, w_sf2, w_sf1)
+
+  f_g1 <- sim_game(home = host_f, away = away_f, hca = hca)
+
+  winners_mat <- cbind(
+    R1_G1 = r1_g1$winner,
+    R1_G2 = r1_g2$winner,
+    QF_G1 = qf_g1$winner,
+    QF_G2 = qf_g2$winner,
+    QF_G3 = qf_g3$winner,
+    QF_G4 = qf_g4$winner,
+    SF_G1 = sf_g1$winner,
+    SF_G2 = sf_g2$winner,
+    F_G1  = f_g1$winner
+  )
+
+  pack_game <- function(game_id, round, g) {
+    tibble(
+      sim_id = seq_len(N),
+      round = round,
+      game_id = game_id,
+      home_team = g$home,
+      away_team = g$away,
+      home_score = g$home_score,
+      away_score = g$away_score,
+      winner = g$winner
+    )
+  }
+
+  games_all <- bind_rows(
+    pack_game("R1_G1", "R1", r1_g1),
+    pack_game("R1_G2", "R1", r1_g2),
+    pack_game("QF_G1", "QF", qf_g1),
+    pack_game("QF_G2", "QF", qf_g2),
+    pack_game("QF_G3", "QF", qf_g3),
+    pack_game("QF_G4", "QF", qf_g4),
+    pack_game("SF_G1", "SF", sf_g1),
+    pack_game("SF_G2", "SF", sf_g2),
+    pack_game("F_G1",  "F",  f_g1)
+  )
+
+  list(games_all = games_all, winners_mat = winners_mat)
+}
+
+n_sims <- 50000
+home_court_adv <- 2.5
+
+sim_out <- sim_tourney(n_sims = n_sims, hca = home_court_adv)
+games_all <- sim_out$games_all
+winners_mat <- sim_out$winners_mat
+```
+
+## Title, Finals, and Semifinals Odds
+
+Here are each team's odds of competing in the semifinals, competing in the championship game, and winning the Patriot League tournament:
+
+```{r echo=FALSE}
+semi_counts <- games_all %>%
+  filter(round == "QF") %>%
+  count(Team = winner, name = "Semis_Count") %>%
+  mutate(Semis_Pct = 100 * Semis_Count / n_sims)
+
+finals_counts <- games_all %>%
+  filter(round == "SF") %>%
+  count(Team = winner, name = "Finals_Count") %>%
+  mutate(Finals_Pct = 100 * Finals_Count / n_sims)
+
+title_counts <- games_all %>%
+  filter(round == "F") %>%
+  count(Team = winner, name = "Title_Count") %>%
+  mutate(Title_Pct = 100 * Title_Count / n_sims)
+
+odds_table <- seeds %>%
+  left_join(semi_counts, by = "Team") %>%
+  left_join(finals_counts, by = "Team") %>%
+  left_join(title_counts, by = "Team") %>%
+  mutate(across(ends_with(c("_Count", "_Pct")), ~replace_na(., 0))) %>%
+  mutate(
+    Semis_Pct = round(Semis_Pct, 1),
+    Finals_Pct = round(Finals_Pct, 1),
+    Title_Pct = round(Title_Pct, 1)
+  ) %>%
+  arrange(desc(Title_Pct))
+
+odds_table %>%
+  select(
+    Seed, Team,
+    Semis_Count, Semis_Pct,
+    Finals_Count, Finals_Pct,
+    Title_Count, Title_Pct,
+  ) %>%
+  kbl(
+    format = "html",
+    caption = paste0("Tournament Odds (N = ", n_sims, " simulations)"),
+    col.names = c(
+      "Seed", "Team",
+      "Semis (Count)", "Semis (%)",
+      "Finals (Count)", "Finals (%)",
+      "Title (Count)", "Title (%)"
+    ),
+    align = "c",
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE)
+```
+
+## Potential Head-to-Heads in the Tournament
+
+This is a summary of every potential game that could be played in this tournament. 
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+matchup_by_round_seeded <- games_all %>%
+  mutate(
+    seed_home = seed_of[home_team],
+    seed_away = seed_of[away_team],
+    
+    TeamA = if_else(seed_home < seed_away, home_team, away_team),
+    TeamB = if_else(TeamA == home_team, away_team, home_team),
+    
+    score_A = if_else(TeamA == home_team, home_score, away_score),
+    score_B = if_else(TeamB == home_team, home_score, away_score),
+    
+    A_wins = (winner == TeamA)
+  ) %>%
+  group_by(round, TeamA, TeamB) %>%
+  summarise(
+    n_games = n(),
+    sims_occurred = n_distinct(sim_id),
+    sims_occur_pct = 100 * sims_occurred / n_sims,
+    A_win_pct = 100 * mean(A_wins),
+    avg_score_A = mean(score_A),
+    avg_score_B = mean(score_B),
+    avg_total = mean(score_A + score_B),
+    avg_margin_A = mean(score_A - score_B),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(sims_occur_pct),
+          factor(round, levels = c("R1", "QF", "SF", "F")))
+
+matchup_by_round_seeded %>%
+  mutate(
+    sims_occur_pct = round(sims_occur_pct, 1),
+    A_win_pct = round(A_win_pct, 1),
+    avg_score_A = round(avg_score_A),
+    avg_score_B = round(avg_score_B),
+    avg_total = round(avg_total, 1),
+    avg_margin_A = round(avg_margin_A, 1)
+  ) %>%
+  kbl(
+    format = "html",
+    caption = "Matchups by Round (Team A = Higher Seed): Occurrence, Win Probability, and Average Scores",
+    col.names = c("Round", "Team A (Higher Seed)", "Team B", "Games", "Sims Occurred", "Occur %", "A Win %", "A Avg Pts", "B Avg Pts", "Avg Total", "A Avg Margin"),
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE)
+```
+
+## The Most Common Bracket
+
+Here is the most common bracket, based on the simulations:
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+sig <- apply(winners_mat, 1, paste, collapse = " | ")
+
+mode_tbl <- tibble(signature = sig) %>%
+  count(signature, sort = TRUE)
+
+mode_sig <- mode_tbl$signature[1]
+mode_sim_id <- which(sig == mode_sig)[1]
+
+game_order <- c("R1_G1", "R1_G2", "QF_G1", "QF_G2", "QF_G3", "QF_G4", "SF_G1", "SF_G2", "F_G1")
+
+mode_bracket <- games_all %>%
+  filter(sim_id == mode_sim_id) %>%
+  mutate(game_id = factor(game_id, levels = game_order)) %>%
+  arrange(game_id) %>%
+  select(game_id, round, home_team, away_team, home_score, away_score, winner)
+
+coords <- tribble(
+  ~game_id, ~home_x, ~home_y, ~away_x, ~away_y, ~win_x, ~win_y,
+  "R1_G1",  100,       250,      100,       175,     400,      210,
+  "R1_G2",  100,       925,      100,       1000,    400,      960,
+  "QF_G1",  400,       60,       400,       210,     675,      135,
+  "QF_G2",  400,       510,      400,       360,     675,      435,
+  "QF_G3",  400,       660,      400,       810,     675,      735,
+  "QF_G4",  400,       1110,     400,       960,     675,      1035,
+  "SF_G1",  675,       150,      675,       450,     1000,     285,
+  "SF_G2",  675,       1050,     675,       1050,    1000,     885,
+  "F_G1",   1100,      300,      1100,      900,     1300,     585
+)
+
+bracket_img_path <- "bracket.png"
+img <- image_read(bracket_img_path)
+out <- img
+
+labels <- mode_bracket %>%
+  left_join(coords, by = "game_id") %>%
+  mutate(
+    home_team = as.character(home_team),
+    away_team = as.character(away_team),
+    winner = as.character(winner)
+  )
+
+title_xy <- list(x = 700, y = 1150)
+round_labels <- tribble(
+  ~text, ~x, ~y,
+  "First Round", 120, 20,
+  "Quaterfinals", 450, 20,
+  "Semifinals", 750, 20,
+  "Championship", 1050, 20
+)
+
+annotate_bracket <- function(base_img_path,
+                             labels_games,
+                             coords,
+                             out_file,
+                             title_text = "2026 Patriot League Tournament",
+                             title_xy = list(x = 780, y = 40),
+                             round_labels = NULL,
+                             team_size = 30,
+                             win_size = 30){
+  
+  img <- image_read(base_img_path)
+  
+  img <- image_annotate(
+    img,
+    text = title_text,
+    size = 30,
+    color = "white",
+    location = paste0("+", title_xy$x, "+", title_xy$y)
+  )
+  
+  if(!is.null(round_labels)){
+    for(i in seq_len(nrow(round_labels))){
+      img <- image_annotate(
+        img,
+        text = round_labels$text[i],
+        size = 24,
+        color = "white",
+        location = paste0("+", round(round_labels$x[i]), "+", round(round_labels$y[i]))
+      )
+    }
+  }
+  
+  labels <- labels_games %>%
+    left_join(coords, by = "game_id") %>%
+    mutate(
+      home_team = as.character(home_team),
+      away_team = as.character(away_team),
+      winner = as.character(winner)
+    )
+  
+  out <- img
+  
+  for(i in seq_len(nrow(labels))){
+    rd <- labels$round[i]
+    gid <- as.character(labels$game_id[i])
+    
+    if(rd == "R1"){
+      out <- image_annotate(
+        out,
+        text = labels$home_team[i],
+        size = 30,
+        color = "white",
+        location = paste0("+", round(labels$home_x[i]), "+", round(labels$home_y[i]))
+      )
+      out <- image_annotate(
+        out,
+        text = labels$away_team[i],
+        size = 30,
+        color = "white",
+        location = paste0("+", round(labels$away_x[i]), "+", round(labels$away_y[i]))
+      )
+    }
+    
+    if(rd == "QF"){
+      out <- image_annotate(
+        out,
+        text = labels$home_team[i],
+        size = 30,
+        color = "white",
+        location = paste0("+", round(labels$home_x[i]), "+", round(labels$home_y[i]))
+      )
+    
+      if(gid %in% c("QF_G2", "QF_G3")){
+        out <- image_annotate(
+          out,
+          text = labels$away_team[i],
+          size = 30,
+          color = "white",
+          location = paste0("+", round(labels$away_x[i]), "+", round(labels$away_y[i]))
+        )
+      }
+    }
+  
+    score_label <- if(labels$winner[i] == labels$home_team[i]){
+      paste0(labels$winner[i], " ", labels$home_score[i], "-", labels$away_score[i])
+    } else {
+      paste0(labels$winner[i], " ", labels$away_score[i], "-", labels$home_score[i])
+    }
+  
+    out <- image_annotate(
+      out,
+      text = score_label,
+      size = 30,
+      color = "cyan",
+      location = paste0("+", round(labels$win_x[i]), "+", round(labels$win_y[i]))
+    )
+  }
+  
+  image_write(out, out_file)
+  out_file
+}
+
+mode_labels_games <- mode_bracket %>%
+  mutate(round = as.character(round),
+         game_id = as.character(game_id))
+
+annotate_bracket(
+  base_img_path = bracket_img_path,
+  labels_games = mode_labels_games,
+  coords = coords,
+  out_file = "bracket_most_common.png",
+  title_text = "2026 Patriot League Tournament - Most Common Bracket",
+  title_xy = title_xy,
+  round_labels
+)
+
+knitr::include_graphics("bracket_most_common.png")
+```
+
+## The Most Likely Bracket
+
+Here is the most likely bracket, based on the simulations:
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+p_home_win <- games_all %>%
+  group_by(home_team, away_team) %>%
+  summarise(p = mean(home_score > away_score), groups = "drop")
+
+pick_most_likely_winner <- function(home, away, p_tbl){
+  p <- p_tbl %>% filter(home_team == home, away_team == away) %>% pull(p)
+  if(length(p) == 0){
+    return(ifelse(seed_of[[home]] < seed_of[[away]], home, away))
+  }
+  ifelse(p >= 0.5, home, away)
+}
+
+build_most_likely_games <- function(p_tbl){
+  
+  host_game <- function(t1, t2){
+    s1 <- seed_of[[t1]]; s2 <- seed_of[[t2]]
+    if(s1 < s2) list(home = t1, away = t2) else list(home = t2, away = t1)
+  }
+  
+  games <- list()
+  
+  # first round
+  g <- host_game(team_of[["8"]], team_of[["9"]])
+  w <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["R1_G1"]] <- list(round = "R1", home = g$home, away = g$away, winner = w)
+  
+  g <- host_game(team_of[["7"]], team_of[["10"]])
+  w2 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["R1_G2"]] <- list(round = "R1", home = g$home, away = g$away, winner = w2)
+  
+  # quarterfinals
+  g <- host_game(team_of[["1"]], games[["R1_G1"]]$winner)
+  w3 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["QF_G1"]] <- list(round = "QF", home = g$home, away = g$away, winner = w3)
+  
+  g <- host_game(team_of[["4"]], team_of[["5"]])
+  w4 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["QF_G2"]] <- list(round = "QF", home = g$home, away = g$away, winner = w4)
+  
+  g <- host_game(team_of[["3"]], team_of[["6"]])
+  w5 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["QF_G3"]] <- list(round = "QF", home = g$home, away = g$away, winner = w5)
+  
+  g <- host_game(team_of[["2"]], games[["R1_G2"]]$winner)
+  w6 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["QF_G4"]] <- list(round = "QF", home = g$home, away = g$away, winner = w6)
+  
+  # semifinals
+  g <- host_game(games[["QF_G1"]]$winner, games[["QF_G2"]]$winner)
+  w7 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["SF_G1"]] <- list(round = "SF", home = g$home, away = g$away, winner = w7)
+  
+  g <- host_game(games[["QF_G3"]]$winner, games[["QF_G4"]]$winner)
+  w8 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["SF_G2"]] <- list(round = "SF", home = g$home, away = g$away, winner = w8)
+  
+  # championship
+  g <- host_game(games[["SF_G1"]]$winner, games[["SF_G2"]]$winner)
+  w9 <- pick_most_likely_winner(g$home, g$away, p_tbl)
+  games[["F_G1"]] <- list(round = "F", home = g$home, away = g$away, winner = w9)
+  
+  tibble(
+    game_id = names(games),
+    round = map_chr(games, "round"),
+    home_team = map_chr(games, "home"),
+    away_team = map_chr(games, "away"),
+    winner = map_chr(games, "winner")
+  ) %>%
+    mutate(game_id = factor(game_id, levels = c("R1_G1", "R1_G2", "QF_G1", "QF_G2", "QF_G3", "QF_G4", "SF_G1", "SF_G2", "F_G1"))) %>%
+    arrange(game_id) %>%
+    mutate(game_id = as.character(game_id))
+}
+
+likely_games <- build_most_likely_games(p_home_win)
+
+score_lookup <- games_all %>%
+  group_by(home_team, away_team) %>%
+  summarise(
+    home_score = median(home_score),
+    away_score = median(away_score),
+    .groups = "drop"
+  )
+
+likely_labels_games <- likely_games %>%
+  left_join(score_lookup, by = c("home_team", "away_team")) %>%
+  mutate(
+    home_score = round(home_score),
+    away_score = round(away_score)
+  )
+
+annotate_bracket(
+  base_img_path = bracket_img_path,
+  labels_games = likely_labels_games,
+  coords = coords,
+  out_file = "bracket_most_likely.png",
+  title_text = "2026 Patriot League Tournament - Most Likely Bracket",
+  title_xy = title_xy,
+  round_labels = round_labels
+)
+
+knitr::include_graphics("bracket_most_likely.png")
+```
+
+# Summary
+
+* First Round
+   * 8 Bucknell vs. 9 Army
+       * Bucknell is the favorite with about a $62\%$ chance of winning.
+       * The most likely score is 76-73 in favor of the Bison; they win this game on average by about $4$ points.
+   * 7 Lafayette vs. 10 Holy Cross
+       * Lafayette is the favorite with about a $67\%$ chance of winning.
+       * The most likely score is 73-69 in favor of the Leopards; they win this game on average by about $4$ points.
+* Quarterfinals
+    * 3 Colgate vs. 6 Loyola
+        * Colgate is the favorite with about a $72\%$ chance of winning.
+        * The most likely score is 78-73 in favor of the Raiders; they win this game on average by about $5$ points.
+    * 4 Boston vs. 5 American
+        * Boston is the favorite with about a $69\%$ chance of winning.
+        * The most likely score is 74-70 in favor of the Terriers; they win this game on average by about $4$ points.
+    * 1 Navy vs. 8/9
+        * Navy vs. Bucknell
+            * This matchup occurred in about $62\%$ of the simulated brackets.
+            * Navy is the favorite with about an $88\%$ chance of winning.
+            * The most likely score is 78-65 in favor of the Midshipmen; they win this game on average by about $14$ points.
+        * Navy vs. Army
+            * This matchup occurred in about $38\%$ of the simulated brackets.
+            * Navy is the favorite with about a $93\%$ chance of winning.
+            * The most likely score is 79-65 in favor of the Midshipmen; they win this game on average by about $14$ points.
+    * 2 Lehigh vs. 7/10
+        * Lehigh vs. Lafayette
+            * This matchup occurred in about $67\%$ of the simulated brackets.
+            * Lehigh is the favorite with about a $73\%$ chance of winning.
+            * The most likely score is 76-70 in favor of the Mountain Hawks; they win this game on average by about $6$ points.
+        * Lehigh vs. Holy Cross
+            * This matchup occurred in about $33\%$ of the simulated brackets.
+            * Lehigh is the favorite with about a $77\%$ chance of winning.
+            * The most likely score is 76-70 in favor of the Mountain Hawks; they win this game on average by about $6$ points.
+* Semifinals
+    * Semifinal Game 1 (1/8/9 vs. 4/5)
+        * 1 Navy vs. 4 Boston
+            * This matchup occurred in about $62\%$ of the simulated brackets.
+            * Navy is the favorite with about an $80\%$ of winning.
+            * The most likely score is 76-68 in favor of the Midshipmen; they win this game on average by about $8$ points.
+        * 1 Navy vs. 5 American
+            * This matchup occurred in about $28\%$ of the simulated brackets.
+            * Navy is the favorite with about an $86\%$ chance of winning.
+            * The most likely score is 74-65 in favor of the Midshipmen; they win this game on average by about $9$ points.
+        * 4 Boston vs. 8 Bucknell
+            * This matchup occurred in about $5\%$ of the simulated brackets.
+            * Boston is the favorite with about a $79\%$ chance of winning.
+            * The most likely score is 79-70 in favor of the Terriers; they win this game on average by about $9$ points.
+        * 5 American vs. 8 Bucknell
+            * This matchup occurred in about $2\%$ of the simulated brackets.
+            * American is the favorite with about a $78\%$ chance of winning.
+            * The most likely score is 76-68 in favor of the Eagles; they win this game on average by about $8$ points.
+        * 4 Boston vs. 9 Army
+            * This matchup occurred in about $2\%$ of the simulated brackets.
+            * Boston is the favorite with about an $84\%$ chance of winning.
+            * The most likely score is 80-71 in favor of the Terriers; they win this game on average by about $9$ points.
+        * 5 American vs. 9 Army
+            * This matchup occurred in about $1\%$ of the simulated brackets.
+            * American is the favorite with about an $87\%$ chance of winning.
+            * The most likely score is 77-68 in favor of the Eagles; they win this game on average by about $9$ points.
+    * Semifinal Game 2 (2/7/10 vs. 3/6)
+        * 2 Lehigh vs. 3 Colgate
+            * This matchup occurred in about $53\%$ of the simulated brackets.
+            * Lehigh is the favorite with about a $63\%$ chance of winning.
+            * The most likely score is 77-74 in favor of the Mountain Hawks; they win this game on average by about $3$ points.
+        * 2 Lehigh vs. 6 Loyola
+            * This matchup occurred in about $21\%$ of the simulated brackets.
+            * Lehigh is the favorite with about a $68\%$ chance of winning.
+            * The most likely score is 78-73 in favor of the Mountain Hawks; they win this game on average by about $4$ points.
+        * 3 Colgate vs. 7 Lafayette
+            * This matchup occurred in about $13\%$ of the simulated brackets.
+            * Colgate is the favorite with about a $75\%$ chance of winning.
+            * The most likely score is 76-70 in favor of the Raiders; they win this game on average by about $6$ points.
+        * 3 Colgate vs. 10 Holy Cross
+            * This matchup occurred in about $5\%$ of the simulated brackets.
+            * Colgate is the favorite with about a $79\%$ chance of winning.
+            * The most likely score is 77-70 in favor of the Raiders; they win this game on average by about $7$ points.
+        * 6 Loyola vs. 7 Lafayette
+            * This matchup occurred in about $5\%$ of the simulated brackets.
+            * Loyola is the favorite with about a $67\%$ chance of winning.
+            * The most common score is 75-71 in favor of the Greyhounds; they win this game on average by about $4$ points.
+        * 6 Loyola vs. 10 Holy Cross
+            * This matchup occurred in about $2\%$ of the simulated brackets.
+            * Loyola is the favorite with about a $70\%$ chance of winning.
+            * The most likely score is 76571 in favor of the Greyhounds; they win this game on average by about $5$ points.
+* Championship Game (1/4/5/8/9 vs. 2/3/6/7/10)
+    * 1 Navy vs. 2 Lehigh
+        * This matchup occurred in about $35\%$ of the simulated brackets.
+        * Navy is the favorite with about an $88\%$ chance of winning.
+        * The most likely score is 77-67 in favor of the Midshipmen; they win this game on average by about $10$ points.
+    * 1 Navy vs. 3 Colgate
+        * This matchup occurred in about $25\%$ of the simulated brackets.
+        * Navy is the favorite with about an $87\%$ chance of winning.
+        * The most likely score is 77-68 in favor of the Midshipmen; they win this game on average by about $10$ points.
+    * 1 Navy vs. 6 Loyola
+        * This matchup occurred in about $9\%$ of the simulated brackets.
+        * Navy is the favorite with about an $89\%$ chance of winning.
+        * The most likely score is 78-67 in favor of the Midshipmen; they win this game on average by about $11$ points.
+    * 2 Lehigh vs. 4 Boston
+        * This matchup occurred in about $9\%$ of the simulated brackets.
+        * Lehigh is the favorite with about a $57\%$ chance of winning.
+        * The most likely score is 76-75 in favor of the Mountain Hawks; they win this game on average by about $1$ point.
+    * 3 Colgate vs. 4 Boston
+        * This matchup occurred in about $6\%$ of the simulated brackets.
+        * Colgate is the favorite with about a $57\%$ chance of winning.
+        * The most likely score is 76-74 in favor of the Raiders; they win this game on average by about $2$ points.
+    * 1 Navy vs. 7 Lafayette
+        * This matchup occurred in about $4\%$ of the simulated brackets.
+        * Navy is the favorite with about a $92\%$ chance of winning.
+        * The most likely score is 76-64 in favor of the Midshipmen; they win this game on average by about $12$ points.
+    * 2 Lehigh vs. 5 American
+        * This matchup occurred in about $3\%$ of the simulated brackets.
+        * Lehigh is the favorite with about a $61\%$ chance of winning.
+        * The most likely score is 74-72 in favor of the Mountain Hawks; they win this game on average by about $2$ points.
+    * 2 Colgate vs. 5 American
+        * This matchup occurred in about $2\%$ of the simulated brackets.
+        * Colgate is the favorite with about a $64\%$ chance of winning.
+        * The most likely score is 74-72 in favor of the Raiders; they win this game on average by about $3$ points.
+    * 4 Boston vs. 6 Loyola
+        * This matchup occurred in about $2\%$ of the simulated brackets.
+        * Boston is the favorite with about a $75\%$ chance of winning.
+        * The most likely score is 78-72 in favor of the Terriers; they win this game on average by about $7$ points.
+    * 1 Navy vs. 10 Holy Cross
+        * This matchup occurred in about $1\%$ of the simulated brackets.
+        * Navy is the favorite with about a $95\%$ chance of winning.
+        * The most likely score is 77-64 in favor of the Midshipmen; they win this game on average by about $13$ points.
+    * 4 Boston vs. 7 Lafayette
+        * This matchup occurred in about $1\%$ of the simulated brackets.
+        * Boston is the favorite with about an $78\%$ chance of winning.
+        * The most likely score is 76-69 in favor of the Terriers; they win this game on average by about $8$ points.
+    * 2 Lehigh vs. 8 Bucknell
+        * This matchup occurred in about $1\%$ of the simulated brackets.
+        * Lehigh is the favorite with about a $72\%$ chance of winning.
+        * The most likely score is 78-71 in favor of the Mountain Hawks; they win this game on average by about $7$ points.
+    * 5 American vs. 6 Loyola
+        * This matchup occurred in about $1\%$ of the simulated brackets.
+        * American is the favorite with about a $75\%$ chance of winning.
+        * The most likely score is 76-70 in favor of the Eagles; they win this game on average by about $6$ points.
+    * 3 Colgate vs. 8 Bucknell
+        * This matchup occurred in about $1\%$ of the simulated brackets.
+        * Colgate is the favorite with about a $72\%$ chance of winning.
+        * The most likely score is 78-71 in favor of the Raiders; they win this game on average by about $7$ points.
+    * 4 Boston vs. 10 Holy Cross
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $152$ times).
+        * Boston is the favorite with about an $88\%$ chance of winning.
+        * The most likely score is 78-69 in favor of the Terriers; they win this game on average by about $9$ points.
+    * 5 American vs. 7 Lafayette
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $147$ times).
+        * American is the favorite with about a $76\%$ chance of winning.
+        * The most likely score is 73-67 in favor of the Eagles; they win this game on average by about $6$ points.
+    * 6 Loyola vs. 8 Bucknell
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $93$ times).
+        * Loyola is the favorite with about a $79\%$ chance of winning.
+        * The most likely score is 78-71 in favor of the Greyhounds; they win this game on average by about $7$ points.
+    * 2 Lehigh vs. 9 Army
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $91$ times).
+        * Lehigh is the favorite with about a $82\%$ chance of winning.
+        * The most likely score is 80-72 in favor of the Mountain Hawks; they win this game on average by about $8$ points.
+    * 3 Colgate vs. 9 Army
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $66$ times).
+        * Colgate is the favorite with about an $83\%$ chance of winning.
+        * The most likely score is 79-72 in favor of the Raiders; they win this game on average by about $8$ points.
+    * 5 American vs. 10 Holy Cross
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $56$ times).
+        * American is the favorite with about an $88\%$ chance of winning.
+        * The most likely score is 76-66 in favor of the Eagles; they win this game on average by about $9$ points.
+    * 7 Lafayette vs. 8 Bucknell
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $36$ times).
+        * Lafayette is the favorite with about a $64\%$ chance of winning.
+        * The most likely score is 74-71 in favor of the Leopards; they win this game on average by about $3$ points.
+    * 6 Loyola vs. 9 Army
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $24$ times).
+        * Loyola is the favorite with about a $79\%$ chance of winning.
+        * The most likely score is 78-70 in favor of the Greyhounds; they win this game on average by about $8$ points.
+    * 8 Bucknell vs. 10 Holy Cross
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $12$ times).
+        * Bucknell is the favorite with about a $75\%$ chance of winning.
+        * The most likely score is 76-72 in favor of the Bison; they win this game on average by about $4$ points.
+    * 7 Lafayette vs. 9 Army
+        * This matchup occurred in about $0\%$ of the simulated brackets (only $11$ times).
+        * Lafayette is the favorite with about a $73\%$ chance of winning.
+        * The most likely score is 77-72 in favor of the Leopards; they win this game on average by about $5$ points.
+    * 9 Army vs. 10 Holy Cross
+        * This is the least probable title game, only appearing three times in $50,000$ simulations.
+        * Holy Cross won two of the three games, making them the favorite.
+        * The most likely score is 67-62 in favor of the Crusaders; they win this game on average by about $5$ points.
