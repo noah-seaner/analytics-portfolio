@@ -21,7 +21,7 @@ To simulate and forecast a team's conference record using performance metrics su
 - Based on only non-conference games, simulated records varied depending on the team, but the most likely records were clustered around 6-12 wins, with the median projected record sitting at 9 wins
 - Iteratively updating the model after each conference game increased the spread of the simulated records, with the most likely records currently clustered between 5-16 wins, while the median projected record still sits at 9 wins
 - Lafayette finished the season with one more win than they were projected to before the start of the conference season.
-- Looking ahead to the conference tournament, Navy has the highest odds of winning at about 65%; Lafayette's odds for the Patriot League title sit at 
+- Looking ahead to the conference tournament, Navy has the highest odds of winning at about 65%; Lafayette's odds for the Patriot League title sit at 0.6%.
 
 ## Notes
 This project reflects an applied sports analytics workflow where models are continuously updated during the season to incorporate new information and improve forecast accuracy.
