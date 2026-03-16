@@ -31,4 +31,11 @@ A separate simulation modeled potential conference tournament brackets. By simul
 - Summarized results using probability distributions and outcome tables
 
 ## Key Insights
-- Early simulations based on non-conference performance suggested that Lafayette would likely finish in 7th 
+- Early simulations based on non-conference performance suggested that Lafayette would likely finish near the bottom of the conference standings. The most common simulated outcomes clustered around a 9th-place finish, but within a couple of games of the other teams, indicating that Lafayette's season would be closely contested within the conference.
+- As conference games were incorporated into the model, projections became more stable and the range of possible outcomes narrowed. This reflected how real game results reduced uncertainty in the simulation over time. Lafayette ultimately finished in 7th place in the Patriot League standings with one more win than they were expected to have in earlier simulations.
+- Throughout conference play, simulations highlighted how small differences in performance could significantly impact Lafayette's projected standing. Because several teams had similar performance profiles, individual game outcomes often shifted simulated finishing positions by multiple places.
+- Tournament simulations showed that while most projected brackets followed expected seeding patterns, upset scenarios remained possible due to relatively small differences between teams. In the actual tournament, the bracket largely followed seed expectations, with Lafayette's first-round loss and Navy's semifinal loss representing the only upsets.
+- Overall, the project demonstrated how simulation-based forecasting can provide a dynamic view of a season, allowing projections for a specific team like Lafayette to evolve as new performance data becomes available.
+
+## Notes
+This project illustrates how simulation models can be used throughout a season to track and forecast team performance. By updating projections as new data becomes available, simulations can provide a more flexible and informative perspective than static season predictions.
